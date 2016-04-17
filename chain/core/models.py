@@ -7,6 +7,8 @@ class GeoLocation(models.Model):
     longitude = models.FloatField()
     elevation = models.FloatField(null=True, blank=True)
 
+class Organization(models.Model):
+    pass
 
 class Site(models.Model):
     '''An installation of Chain API, usually on the scale of several or many
