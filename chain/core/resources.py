@@ -3,26 +3,27 @@ from chain.core.api import full_reverse
 from chain.core.api import CHAIN_CURIES
 from chain.core.api import BadRequestException
 from chain.core.api import register_resource
-from chain.core.models import Site, Device, ScalarSensor, ScalarData, \
-    PresenceSensor, PresenceData, Person
+from chain.core.models import Organization, Deployment, FixedSite, Device, \
+    Sensor, SensorData, APIDataStore, APIData, \
+    CalibrationDataStore, CalibrationData, LocationData, Contact
 from django.conf.urls import include, patterns, url
 from django.utils import timezone
 from datetime import timedelta, datetime
 import calendar
 
 
-class ScalarSensorDataResource(Resource):
-    model = ScalarData
+class SensorDataResource(Resource):
+    model = SensorData
     display_field = 'timestamp'
-    resource_name = 'scalar_data'
-    resource_type = 'scalar_data'
-    model_fields = ['timestamp', 'value']
+    resource_name = 'sensor_data'
+    resource_type = 'sensor_data'
+    model_fields = ['timestamp', 'value', 'duration_sec']
     required_fields = ['value']
-    queryset = ScalarData.objects
+    queryset = SensorData.objects
     default_timespan = timedelta(hours=6)
 
     def __init__(self, *args, **kwargs):
-        super(ScalarSensorDataResource, self).__init__(*args, **kwargs)
+        super(SensorDataResource, self).__init__(*args, **kwargs)
         if 'queryset' in kwargs:
             # we want to default to the last page, not the first page
             pass
@@ -33,7 +34,7 @@ class ScalarSensorDataResource(Resource):
 
         if not embed:
             return super(
-                ScalarSensorDataResource,
+                SensorDataResource,
                 self).serialize_list(
                 embed,
                 cache)
@@ -86,7 +87,8 @@ class ScalarSensorDataResource(Resource):
                                               page_start, page_end)
         serialized_data['data'] = [{
             'value': obj.value,
-            'timestamp': obj.timestamp.isoformat()}
+            'timestamp': obj.timestamp.isoformat(),
+            'duration_sec': obj.duration_sec}
             for obj in objs]
         return serialized_data
 
@@ -120,7 +122,7 @@ class ScalarSensorDataResource(Resource):
         data['_links'] = {
             'self': {'href': self.get_single_href()},
             'ch:sensor': {'href': full_reverse(
-                'scalar_sensors-single', self._request,
+                'sensors-single', self._request,
                 args=(self._filters['sensor_id'],))}
         }
         return data
@@ -133,7 +135,8 @@ class ScalarSensorDataResource(Resource):
             id=self._obj.sensor_id)
         return ['sensor-%d' % db_sensor.id,
                 'device-%d' % db_sensor.device_id,
-                'site-%d' % db_sensor.device.site_id]
+                'site-%d' % db_sensor.device.site_id,
+                'deployment-%d' % db_sensor.device.deployment_id]
 
 
 class ScalarSensorResource(Resource):
@@ -873,7 +876,7 @@ urls = patterns(
     '',
     url(r'^/?$', ApiRootResource.single_view, name='api-root')
 )
-
+'''
 # add additional URLS to account for the rename of sensor to scalarsensor.
 # unfortunately we can't use redirects in case clients are POSTing to outdated
 # URLs. If we WERE redirecting, we would use RedirectView.as_view()
@@ -885,7 +888,7 @@ urls += patterns('',
                  url("^sensordata/", include(ScalarSensorDataResource.urls())),
                  url("^sensor/", include(ScalarSensorResource.urls())),
                  )
-
+'''
 resources = [
     ScalarSensorDataResource,
     ScalarSensorResource,
