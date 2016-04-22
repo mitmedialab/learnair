@@ -35,6 +35,8 @@ def schema_type_from_model_field(field):
         return 'boolean', None
     elif field_class == models.ForeignKey:
         return 'string', 'url'
+    elif field_class == models.EmailField:
+        return 'string', 'email_address'
     else:
         raise NotImplementedError('Field type %s not recognized' % field_class)
 

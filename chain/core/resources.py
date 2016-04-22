@@ -4,14 +4,15 @@ from chain.core.api import CHAIN_CURIES
 from chain.core.api import BadRequestException
 from chain.core.api import register_resource
 from chain.core.models import Organization, Deployment, FixedSite, Device, \
-    Sensor, SensorData, APIDataStore, APIData, \
-    CalibrationDataStore, CalibrationData, LocationData, Contact
+    Sensor, SensorType, SensorData, APIDataStore, APIData, APIType, \
+    CalibrationDataStore, CalibrationData, LocationData, Contact, DeviceType
 from django.conf.urls import include, patterns, url
 from django.utils import timezone
 from datetime import timedelta, datetime
 import calendar
+import itertools
 
-
+# Edited DRAMSAY
 class SensorDataResource(Resource):
     model = SensorData
     display_field = 'timestamp'
@@ -135,108 +136,42 @@ class SensorDataResource(Resource):
             id=self._obj.sensor_id)
         return ['sensor-%d' % db_sensor.id,
                 'device-%d' % db_sensor.device_id,
-                'site-%d' % db_sensor.device.site_id,
-                'deployment-%d' % db_sensor.device.deployment_id]
+                'site-%d' % db_sensor.device.site_id]
 
 
-class ScalarSensorResource(Resource):
-
-    model = ScalarSensor
-    display_field = 'metric'
-    resource_name = 'scalar_sensors'
-    resource_type = 'scalar_sensor'
-    required_fields = ['metric', 'unit']
-
-    # for now, name is hardcoded as the only attribute of metric and unit
-    stub_fields = {'metric': 'name', 'unit': 'name'}
-    queryset = ScalarSensor.objects
-    related_fields = {
-        'ch:dataHistory': CollectionField(ScalarSensorDataResource,
-                                          reverse_name='sensor'),
-        'ch:device': ResourceField('chain.core.resources.DeviceResource',
-                                   'device')
-    }
-
-    def serialize_single(self, embed, cache, *args, **kwargs):
-        data = super(
-            ScalarSensorResource,
-            self).serialize_single(
-            embed,
-            cache,
-            *args,
-            **kwargs)
-
-        data['sensor-type'] = "scalar"
-        if embed:
-            data['dataType'] = 'float'
-            last_data = self._obj.scalar_data.order_by(
-                'timestamp').reverse()[:1]
-            if last_data:
-                data['value'] = last_data[0].value
-                data['updated'] = last_data[0].timestamp.isoformat()
-        return data
-
-    def get_tags(self):
-        return ['sensor-%s' % self._obj.id,
-                'scalar_sensor-%s' % self._obj.id,
-                'device-%s' % self._obj.device_id,
-                'site-%s' % self._obj.device.site_id]
-
-
-class PresenceDataResource(Resource):
-    model = PresenceData
+# Edited DRAMSAY
+class CalibrationDataResource(Resource):
+    model = CalibrationData
     display_field = 'timestamp'
-    resource_name = 'presencedata'
-    resource_type = 'presencedata'
-    model_fields = ['timestamp', 'present', 'person', 'sensor']
-    required_fields = ['person', 'sensor', 'present']
-    queryset = PresenceData.objects
-    default_timespan = timedelta(hours=6)
+    resource_name = 'calibration_data'
+    resource_type = 'calibration_data'
+    model_fields = ['timestamp', 'value', 'description']
+    required_fields = []
+    related_fields = {
+        'ch:contacts': CollectionField('chain.core.resources.ContactResource',
+                                            reverse_name='calibration_data'),
+    }
+    queryset = CalibrationData.objects
+    default_timespan = timedelta(days=6)
 
     def __init__(self, *args, **kwargs):
-        super(PresenceDataResource, self).__init__(*args, **kwargs)
+        super(CalibrationDataResource, self).__init__(*args, **kwargs)
         if 'queryset' in kwargs:
             # we want to default to the last page, not the first page
             pass
 
-    def serialize_single(self, embed, cache):
-        serialized_data = super(
-            PresenceDataResource,
-            self).serialize_single(
-            embed,
-            cache)
-        if 'person' in serialized_data:
-            del serialized_data['person']
-        if 'sensor' in serialized_data:
-            del serialized_data['sensor']
-        if '_links' not in serialized_data:
-            serialized_data['_links'] = {}
-        serialized_data['_links'].update(self.get_additional_links())
-        return serialized_data
-
-    def get_additional_links(self):
-        return {
-            'person': {
-                'href': self.get_person_url(
-                    self._obj.person), 'title': "%s, %s" %
-                (self._obj.person.last_name, self._obj.person.first_name)}, 'sensor': {
-                'href': self.get_sensor_url(
-                    self._obj.sensor), 'title': "%s->%s" %
-                (self._obj.sensor.device.name, self._obj.sensor.metric)}}
-
     def serialize_list(self, embed, cache):
-        '''a "list" of SensorData resources is actually represented
+        '''a "list" of CalibrationData resources is actually represented
         as a single resource with a list of data points'''
+
         if not embed:
             return super(
-                PresenceDataResource,
+                CalibrationDataResource,
                 self).serialize_list(
                 embed,
                 cache)
 
         href = self.get_list_href()
-
-        items = []
 
         serialized_data = {
             '_links': {
@@ -244,10 +179,9 @@ class PresenceDataResource(Resource):
                 'createForm': {
                     'href': self.get_create_href(),
                     'title': 'Add Data'
-                },
-                'items': items
+                }
             },
-            'dataType': 'presence'
+            'dataType': 'float'
         }
         request_time = timezone.now()
 
@@ -257,7 +191,8 @@ class PresenceDataResource(Resource):
         if 'timestamp__gte' in self._filters:
             try:
                 page_start = datetime.utcfromtimestamp(
-                    float(self._filters['timestamp__gte']))
+                    float(self._filters['timestamp__gte'])).replace(
+                        tzinfo=timezone.utc)
             except ValueError:
                 raise BadRequestException(
                     "Invalid timestamp format for lower bound of date range.")
@@ -267,7 +202,8 @@ class PresenceDataResource(Resource):
         if 'timestamp__lt' in self._filters:
             try:
                 page_end = datetime.utcfromtimestamp(
-                    float(self._filters['timestamp__lt']))
+                    float(self._filters['timestamp__lt'])).replace(
+                        tzinfo=timezone.utc)
             except ValueError:
                 raise BadRequestException(
                     "Invalid timestamp format for upper bound of date range.")
@@ -281,37 +217,12 @@ class PresenceDataResource(Resource):
 
         serialized_data = self.add_page_links(serialized_data, href,
                                               page_start, page_end)
-
-        # Make links:
-        for obj in objs:
-            presence_data_resource = PresenceDataResource(
-                obj=obj,
-                request=self._request)
-            items.append(
-                {
-                    'href': presence_data_resource.get_single_href(),
-                    'title': "%s %s %s at time %s" %
-                    (obj.person.last_name,
-                     "at" if obj.present else "left",
-                     obj.sensor.device,
-                     obj.timestamp.isoformat())})
+        serialized_data['data'] = [{
+            'value': obj.value,
+            'timestamp': obj.timestamp.isoformat(),
+            'description': obj.description}
+            for obj in objs]
         return serialized_data
-
-    def get_person_url(self, obj):
-        if self._request is None:
-            # No way to form URL, just return the person's ID
-            return obj.id
-        person_resource = PersonResource(obj=obj, request=self._request)
-        return person_resource.get_single_href()
-
-    def get_sensor_url(self, obj):
-        if self._request is None:
-            # No way to form URL, just return the person's ID
-            return obj.id
-        psensor_resource = PresenceSensorResource(
-            obj=obj,
-            request=self._request)
-        return psensor_resource.get_single_href()
 
     def format_time(self, timestamp):
         return calendar.timegm(timestamp.timetuple())
@@ -339,144 +250,472 @@ class PresenceDataResource(Resource):
 
     def serialize_stream(self):
         '''Serialize this resource for a stream'''
-        data = self.serialize_single(False, None)  # (rels=False)
-        # TODO:  Make useful
+        data = self.serialize_single(rels=False)
         data['_links'] = {
-            'href': self.get_single_href(),
-            #'person':
+            'self': {'href': self.get_single_href()},
+            'ch:calibration_datastore': {'href': full_reverse(
+                'calibration_datastore-single', self._request,
+                args=(self._filters['calibration_datastore_id'],))}
         }
-        data['_links'].update(self.get_additional_links())
         return data
 
     def get_tags(self):
         if not self._obj:
             raise ValueError(
                 'Tried to called get_tags on a resource without an object')
-        db_sensor = PresenceSensor.objects.select_related('device').get(
+        db_sensor = ScalarSensor.objects.select_related('device').get(
             id=self._obj.sensor_id)
-        return ['person-%d' % self._obj.person_id,
-                'sensor-%d' % db_sensor.id,
-                'device-%d' % db_sensor.device_id,
-                'site-%d' % db_sensor.device.site_id]
-
-    def get_filled_schema(self):
-        schema = super(PresenceDataResource, self).get_filled_schema()
-        # we need to replace the sensor and/or person links with just
-        # the URL instead of the full object
-        props = schema['properties']
-        if 'person' in props:
-            person_default = props['person']['default']
-            props['person']['default'] = self.get_person_url(person_default)
-        if 'sensor' in props:
-            sensor_default = props['sensor']['default']
-            props['sensor']['default'] = self.get_sensor_url(sensor_default)
-        return schema
+        return ['calibration_datastore-%d' % db_calibration_datastore.id]
 
 
-class PresenceSensorResource(Resource):
-    model = PresenceSensor
+# Edited DRAMSAY
+class APIDataResource(Resource):
+    model = APIData
+    display_field = 'timestamp'
+    resource_name = 'api_data'
+    resource_type = 'api_data'
+    model_fields = ['timestamp', 'value', 'duration_sec', 'api_access_time', 'api_call']
+    required_fields = ['value']
+    queryset = APIData.objects
+    default_timespan = timedelta(hours=6)
+
+    def __init__(self, *args, **kwargs):
+        super(APIDataResource, self).__init__(*args, **kwargs)
+        if 'queryset' in kwargs:
+            # we want to default to the last page, not the first page
+            pass
+
+    def serialize_list(self, embed, cache):
+        '''a "list" of SensorData resources is actually represented
+        as a single resource with a list of data points'''
+
+        if not embed:
+            return super(
+                APIDataResource,
+                self).serialize_list(
+                embed,
+                cache)
+
+        href = self.get_list_href()
+
+        serialized_data = {
+            '_links': {
+                'curies': CHAIN_CURIES,
+                'createForm': {
+                    'href': self.get_create_href(),
+                    'title': 'Add Data'
+                }
+            },
+            'dataType': 'float'
+        }
+        request_time = timezone.now()
+
+        # if the time filters aren't given then use the most recent timespan,
+        # if they are given, then we need to convert them from unix time to use
+        # in the queryset filter
+        if 'timestamp__gte' in self._filters:
+            try:
+                page_start = datetime.utcfromtimestamp(
+                    float(self._filters['timestamp__gte'])).replace(
+                        tzinfo=timezone.utc)
+            except ValueError:
+                raise BadRequestException(
+                    "Invalid timestamp format for lower bound of date range.")
+        else:
+            page_start = request_time - self.default_timespan
+
+        if 'timestamp__lt' in self._filters:
+            try:
+                page_end = datetime.utcfromtimestamp(
+                    float(self._filters['timestamp__lt'])).replace(
+                        tzinfo=timezone.utc)
+            except ValueError:
+                raise BadRequestException(
+                    "Invalid timestamp format for upper bound of date range.")
+        else:
+            page_end = request_time
+
+        self._filters['timestamp__gte'] = page_start
+        self._filters['timestamp__lt'] = page_end
+
+        objs = self._queryset.filter(**self._filters).order_by('timestamp')
+
+        serialized_data = self.add_page_links(serialized_data, href,
+                                              page_start, page_end)
+        serialized_data['data'] = [{
+            'value': obj.value,
+            'timestamp': obj.timestamp.isoformat(),
+            'duration_sec': obj.duration_sec,
+            'api_call': obj.api_call,
+            'api_access_time': obj.api_access_time.isoformat()}
+            for obj in objs]
+        return serialized_data
+
+    def format_time(self, timestamp):
+        return calendar.timegm(timestamp.timetuple())
+
+    def add_page_links(self, data, href, page_start, page_end):
+        timespan = page_end - page_start
+        data['_links']['previous'] = {
+            'href': self.update_href(
+                href, timestamp__gte=self.format_time(page_start - timespan),
+                timestamp__lt=self.format_time(page_start)),
+            'title': '%s to %s' % (page_start - timespan, page_start),
+        }
+        data['_links']['self'] = {
+            'href': self.update_href(
+                href, timestamp__gte=self.format_time(page_start),
+                timestamp__lt=self.format_time(page_end)),
+        }
+        data['_links']['next'] = {
+            'href': self.update_href(
+                href, timestamp__gte=self.format_time(page_end),
+                timestamp__lt=self.format_time(page_end + timespan)),
+            'title': '%s to %s' % (page_end, page_end + timespan),
+        }
+        return data
+
+    def serialize_stream(self):
+        '''Serialize this resource for a stream'''
+        data = self.serialize_single(rels=False)
+        data['_links'] = {
+            'self': {'href': self.get_single_href()},
+            'ch:api_datstore': {'href': full_reverse(
+                'api_datastore-single', self._request,
+                args=(self._filters['api_datastore_id'],))}
+        }
+        return data
+
+    def get_tags(self):
+        if not self._obj:
+            raise ValueError(
+                'Tried to called get_tags on a resource without an object')
+        db_sensor = ScalarSensor.objects.select_related('device').get(
+            id=self._obj.sensor_id)
+        return ['api_datastore-%d' % db_api_datastore.id]
+
+
+# Edited DRAMSAY
+class LocationDataResource(Resource):
+    model = LocationData
+    display_field = 'timestamp'
+    resource_name = 'location_data'
+    resource_type = 'location_data'
+    model_fields = ['timestamp', 'elevation']
+    required_fields = ['latitude','longitude']
+    queryset = LocationData.objects
+    default_timespan = timedelta(hours=6)
+
+    def __init__(self, *args, **kwargs):
+        super(LocationDataResource, self).__init__(*args, **kwargs)
+        if 'queryset' in kwargs:
+            # we want to default to the last page, not the first page
+            pass
+
+    def serialize_list(self, embed, cache):
+        '''a "list" of SensorData resources is actually represented
+        as a single resource with a list of data points'''
+
+        if not embed:
+            return super(
+                LocationDataResource,
+                self).serialize_list(
+                embed,
+                cache)
+
+        href = self.get_list_href()
+
+        serialized_data = {
+            '_links': {
+                'curies': CHAIN_CURIES,
+                'createForm': {
+                    'href': self.get_create_href(),
+                    'title': 'Add Data'
+                }
+            }
+        }
+        request_time = timezone.now()
+
+        # if the time filters aren't given then use the most recent timespan,
+        # if they are given, then we need to convert them from unix time to use
+        # in the queryset filter
+        if 'timestamp__gte' in self._filters:
+            try:
+                page_start = datetime.utcfromtimestamp(
+                    float(self._filters['timestamp__gte'])).replace(
+                        tzinfo=timezone.utc)
+            except ValueError:
+                raise BadRequestException(
+                    "Invalid timestamp format for lower bound of date range.")
+        else:
+            page_start = request_time - self.default_timespan
+
+        if 'timestamp__lt' in self._filters:
+            try:
+                page_end = datetime.utcfromtimestamp(
+                    float(self._filters['timestamp__lt'])).replace(
+                        tzinfo=timezone.utc)
+            except ValueError:
+                raise BadRequestException(
+                    "Invalid timestamp format for upper bound of date range.")
+        else:
+            page_end = request_time
+
+        self._filters['timestamp__gte'] = page_start
+        self._filters['timestamp__lt'] = page_end
+
+        objs = self._queryset.filter(**self._filters).order_by('timestamp')
+
+        serialized_data = self.add_page_links(serialized_data, href,
+                                              page_start, page_end)
+        serialized_data['data'] = [{
+            'latitude': obj.latitude,
+            'longitude': obj.longitude,
+            'timestamp': obj.timestamp.isoformat(),
+            'elevation': obj.elevation}
+            for obj in objs]
+        return serialized_data
+
+    def format_time(self, timestamp):
+        return calendar.timegm(timestamp.timetuple())
+
+    def add_page_links(self, data, href, page_start, page_end):
+        timespan = page_end - page_start
+        data['_links']['previous'] = {
+            'href': self.update_href(
+                href, timestamp__gte=self.format_time(page_start - timespan),
+                timestamp__lt=self.format_time(page_start)),
+            'title': '%s to %s' % (page_start - timespan, page_start),
+        }
+        data['_links']['self'] = {
+            'href': self.update_href(
+                href, timestamp__gte=self.format_time(page_start),
+                timestamp__lt=self.format_time(page_end)),
+        }
+        data['_links']['next'] = {
+            'href': self.update_href(
+                href, timestamp__gte=self.format_time(page_end),
+                timestamp__lt=self.format_time(page_end + timespan)),
+            'title': '%s to %s' % (page_end, page_end + timespan),
+        }
+        return data
+
+    def serialize_stream(self):
+        '''Serialize this resource for a stream'''
+        data = self.serialize_single(rels=False)
+        data['_links'] = {
+            'self': {'href': self.get_single_href()},
+            'ch:device': {'href': full_reverse(
+                'device-single', self._request,
+                args=(self._filters['device_id'],))}
+        }
+        return data
+
+    def get_tags(self):
+        if not self._obj:
+            raise ValueError(
+                'Tried to called get_tags on a resource without an object')
+        return ['device-%d' % db_device.id]
+
+
+class SensorTypeResource(Resource):
+
+    model = SensorType
+    display_field = 'model'
+    resource_name = 'sensor_types'
+    resource_type = 'sensor_type'
+    required_fields = ['model']
+    model_fields = ['manufacturer', 'revision', 'datasheet_url', 'description', 'learn_priority','service_interval_days', 'sensor_topology']
+    related_fields = {
+        'ch:sensors': CollectionField('chain.core.resources.SensorResource',
+                                      reverse_name='sensor_type')
+    }
+    queryset = SensorType.objects
+
+
+# Edited DRAMSAY
+class SensorResource(Resource):
+
+    model = Sensor
     display_field = 'metric'
-    resource_name = 'presence_sensors'
-    resource_type = 'presence_sensor'
-    required_fields = ['metric']
+    resource_name = 'sensors'
+    resource_type = 'sensor'
+    model_fields = ['data_status', 'manufacture_date', 'deploy_date', 'metadata']
+    required_fields = ['metric', 'unit']
 
     # for now, name is hardcoded as the only attribute of metric and unit
-    stub_fields = {'metric': 'name'}
-    queryset = PresenceSensor.objects
+    stub_fields = {'metric': 'name', 'unit': 'name'}
+    queryset = Sensor.objects
     related_fields = {
-        'ch:dataHistory': CollectionField(PresenceDataResource,
+        'ch:dataHistory': CollectionField(SensorDataResource,
                                           reverse_name='sensor'),
         'ch:device': ResourceField('chain.core.resources.DeviceResource',
-                                   'device')
+                                   'device'),
+        'ch:sensor_type': ResourceField('chain.core.resources.SensorTypeResource',
+                                   'sensor_type')
     }
 
     def serialize_single(self, embed, cache, *args, **kwargs):
         data = super(
-            PresenceSensorResource,
+            SensorResource,
             self).serialize_single(
             embed,
             cache,
             *args,
             **kwargs)
-        data['sensor-type'] = "presence"
-        data['dataType'] = "presence"
+
         if embed:
-            if '_embedded' not in data:
-                data['_embedded'] = {}
-            data['_embedded'].update(self.get_additional_embedded())
-        if '_links' not in data:
-            data['_links'] = {}
-        data['_links'].update(self.get_additional_links())
+            data['dataType'] = 'float'
+            last_data = self._obj.scalar_data.order_by(
+                'timestamp').reverse()[:1]
+            if last_data:
+                data['value'] = last_data[0].value
+                data['updated'] = last_data[0].timestamp.isoformat()
         return data
-
-    def get_additional_links(self):
-        links = {}
-        last_data = self._obj.presence_data.order_by(
-            'timestamp').reverse()[:1]
-        if last_data:
-            links['last-visit'] = {
-                'href': self.get_presense_data_url(
-                    last_data[0]), 'title': "%s at %s" %
-                (last_data[0].person, last_data[0].timestamp.isoformat())}
-        return links
-
-    def get_additional_embedded(self):
-        embedded = {}
-        last_data = self._obj.presence_data.order_by(
-            'timestamp').reverse()[:1]
-        if last_data:
-            embedded['last-visit'] = PresenceDataResource(obj=last_data[0], request=self._request)\
-                .serialize_single(False, {})
-        return embedded
-
-    def get_person_url(self, obj):
-        if self._request is None:
-            # No way to form URL, just return the person's ID
-            return obj.id
-        person_resource = PersonResource(obj=obj, request=self._request)
-        return person_resource.get_single_href()
-
-    def get_presense_data_url(self, obj):
-        if self._request is None:
-            # No way to form URL, just return the person's ID
-            return obj.id
-        pdata_resource = PresenceDataResource(obj=obj, request=self._request)
-        return pdata_resource.get_single_href()
-
-    def get_sensor_url(self, obj):
-        if self._request is None:
-            # No way to form URL, just return the person's ID
-            return obj.id
-        psensor_resource = PresenceSensorResource(
-            obj=obj,
-            request=self._request)
-        return psensor_resource.get_single_href()
 
     def get_tags(self):
         return ['sensor-%s' % self._obj.id,
-                'presense_sensor-%s' % self._obj.id,
-                'device-%s' % self._obj.device_id,
-                'site-%s' % self._obj.device.site_id]
+                'device-%s' % self._obj.device_id]
 
 
-class PersonResource(Resource):
+# Edited DRAMSAY
+class CalibrationDataStoreResource(Resource):
 
-    model = Person
-    display_field = 'last_name'
-    resource_name = 'people'
-    resource_type = 'person'
-    required_fields = ['first_name', 'last_name']
-    model_fields = ['first_name', 'last_name', 'twitter_handle', 'rfid']
+    model = CalibrationDataStore
+    display_field = 'metric'
+    resource_name = 'calibration_datastore'
+    resource_type = 'calibration_datastore'
+    model_fields = ['metadata']
+    required_fields = ['metric', 'unit']
+
+    # for now, name is hardcoded as the only attribute of metric and unit
+    stub_fields = {'metric': 'name', 'unit': 'name'}
+    queryset = CalibrationDataStore.objects
     related_fields = {
-        'ch:presence-data': CollectionField(PresenceDataResource,
-                                            reverse_name='person'),
-        'ch:site': ResourceField('chain.core.resources.SiteResource', 'site')
+        'ch:dataHistory': CollectionField(CalibrationDataResource,
+                                          reverse_name='calibration_datastore'),
+        'ch:sensor': ResourceField('chain.core.resources.SensorResource',
+                                   'sensor'),
+        'ch:site': ResourceField('chain.core.resources.FixedSiteResource',
+                                   'site')
     }
-    queryset = Person.objects
 
     def serialize_single(self, embed, cache, *args, **kwargs):
         data = super(
-            PersonResource,
+            ScalarSensorResource,
+            self).serialize_single(
+            embed,
+            cache,
+            *args,
+            **kwargs)
+
+        if embed:
+            data['dataType'] = 'float'
+            last_data = self._obj.scalar_data.order_by(
+                'timestamp').reverse()[:1]
+            if last_data:
+                data['value'] = last_data[0].value
+                data['updated'] = last_data[0].timestamp.isoformat()
+        return data
+
+    def get_tags(self):
+        return ['calibration_datastore-%s' % self._obj.id,
+                'sensor-%s' % self._obj.sensor_id,
+                'site-%s' % self._obj.site_id]
+
+
+class APITypeResource(Resource):
+
+    model = APIType
+    display_field = 'name'
+    resource_name = 'api_types'
+    resource_type = 'api_type'
+    required_fields = ['name']
+    model_fields = ['api_base_address','description']
+    related_fields = {
+        'ch:api_datastores': CollectionField('chain.core.resources.APIDataStoreResource',
+                                      reverse_name='api_type')
+    }
+    queryset = APIType.objects
+
+
+# Edited DRAMSAY
+class APIDataStoreResource(Resource):
+
+    model = APIDataStore
+    display_field = 'metric'
+    resource_name = 'api_datastores'
+    resource_type = 'api_datastore'
+    model_fields = ['metadata']
+    required_fields = ['metric', 'unit']
+
+    # for now, name is hardcoded as the only attribute of metric and unit
+    stub_fields = {'metric': 'name', 'unit': 'name'}
+    queryset = APIDataStore.objects
+    related_fields = {
+        'ch:dataHistory': CollectionField(APIDataResource,
+                                          reverse_name='api_data'),
+        'ch:device': ResourceField('chain.core.resources.DeviceResource',
+                                   'device'),
+        'ch:site': ResourceField('chain.core.resources.FixedSiteResource',
+                                   'site'),
+        'ch:api': ResourceField('chain.core.resources.APITypeResource',
+                                   'api_type'),
+        'ch:api_type': ResourceField('chain.core.resources.APITypeResource',
+                                   'api_type')
+    }
+
+    def serialize_single(self, embed, cache, *args, **kwargs):
+        data = super(
+            APIDataStoreResource,
+            self).serialize_single(
+            embed,
+            cache,
+            *args,
+            **kwargs)
+
+        if embed:
+            data['dataType'] = 'float'
+            last_data = self._obj.scalar_data.order_by(
+                'timestamp').reverse()[:1]
+            if last_data:
+                data['value'] = last_data[0].value
+                data['updated'] = last_data[0].timestamp.isoformat()
+        return data
+
+    def get_tags(self):
+        return ['api_datastore-%s' % self._obj.id,
+                'device-%s' % self._obj.device_id,
+                'site-%s' % self._obj.site_id]
+
+
+# Edited DRAMSAY
+class ContactResource(Resource):
+
+    model = Contact
+    display_field = 'last_name'
+    resource_name = 'contacts'
+    resource_type = 'contact'
+    required_fields = ['first_name', 'last_name']
+    model_fields = ['first_name', 'last_name', 'email', 'phone']
+    ''' related_fields = {
+        'ch:organization': ResourceField('chain.core.resources.OrganizationResource',
+                                            'organization'),
+        'ch:deployment': CollectionField('chain.core.resources.DeploymentResource',
+                                            reverse_name='contact'),
+        'ch:site': CollectionField('chain.core.resources.SiteResource',
+                                            reverse_name='contact'),
+        'ch:device': CollectionField('chain.core.resources.DeviceResource',
+                                            reverse_name='contact'),
+        'ch:calibration_data': CollectionField('chain.core.resources.CalibrationDataResource',
+                                            reverse_name='contact')
+    }
+    '''
+    queryset = Contact.objects
+
+    def serialize_single(self, embed, cache, *args, **kwargs):
+        data = super(
+            ContactResource,
             self).serialize_single(
             embed,
             cache,
@@ -490,18 +729,39 @@ class PersonResource(Resource):
             data['_links'].update(self.get_additional_links())
         return data
 
-    def get_presence_data(self):
+    # TODO: implment similar helper functions for contacts, to get their
+    # deployments, sites, orgs, and devices
+
+    def get_deployments(self):
         filters = {
-            'person': self._obj
+            'contacts': self._obj
         }
-        return PresenceData.objects.filter(**filters).order_by('timestamp')[:1]
+        return Deployment.objects.filter(**filters)[:1]
+
+    def get_sites(self):
+        filters = {
+            'contacts': self._obj
+        }
+        return FixedSite.objects.filter(**filters)[:1]
+
+    def get_devices(self):
+        filters = {
+            'contacts': self._obj
+        }
+        return Device.objects.filter(**filters)[:1]
+
+    def get_calibration_data(self):
+        filters = {
+            'contact': self._obj
+        }
+        return CalibrationData.objects.filter(**filters).order_by('timestamp')[:1]
 
     def get_additional_links(self):
         links = {}
-        last_data = self.get_presence_data()
+        last_data = self.get_calibration_data()
         if last_data:
             links['last-visit'] = {
-                'href': self.get_presense_data_url(
+                'href': self.get_calibration_data_url(
                     last_data[0]),
                 'title': "at %s->%s at time %s" %
                 (last_data[0].sensor.device,
@@ -513,28 +773,40 @@ class PersonResource(Resource):
                 'title': 'Picture URL (external)'
             }
         return links
-
+    '''
     def get_additional_embedded(self):
         embedded = {}
-        last_data = self.get_presence_data()
+        last_data = self.get_calibration_data()
+        user_deployments = self.get_deployments()
+        user_sites = self.get_sites()
+        user_devices = self.get_devices()
+
         if last_data:
-            embedded['last-visit'] = PresenceDataResource(obj=last_data[0], request=self._request)\
+            embedded['last-calibration'] = ContactResource(obj=last_data[0], request=self._request)\
+                .serialize_single(False, {})
+        if user_deployments:
+            embedded['last-deployment'] = ContactResource(obj=user_deployments[0], request=self._request)\
+                .serialize_single(False, {})
+        if user_sites:
+            embedded['last-site'] = ContactResource(obj=user_sites[0], request=self._request)\
+                .serialize_single(False, {})
+        if user_devices:
+            embedded['last-device'] = ContactResource(obj=user_devices[0], request=self._request)\
                 .serialize_single(False, {})
         return embedded
-
-    def get_presense_data_url(self, obj):
+    '''
+    def get_calibration_data_url(self, obj):
         if self._request is None:
             # No way to form URL, just return the person's ID
             return obj.id
-        pdata_resource = PresenceDataResource(obj=obj, request=self._request)
+        pdata_resource = CalibrationDataResource(obj=obj, request=self._request)
         return pdata_resource.get_single_href()
-
+    '''
     def get_tags(self):
         # sometimes the site_id field is unicode? weird
         return ['person-%d' % self._obj.id,
-                'site-%s' % self._obj.site_id]
-
-
+                'organization-%s' % self._obj.organization_id]
+    '''
 '''
 Merge two "JSON" style dictionary/list objects
   recursively.  Designed for merging schemas from
@@ -572,221 +844,155 @@ def json_merge(obj1, obj2):
         return obj1
 
 
-class MixedSensorResource(Resource):
+class DeviceTypeResource(Resource):
 
-    model = ScalarSensor
-    display_field = 'metric'
-    resource_name = 'sensors'
-    resource_type = 'sensor'
-
-    # for now, name is hardcoded as the only attribute of metric and unit
-    stub_fields = {'metric': 'name'}
-
-    queryset = ScalarSensor.objects
-
-    available_sensor_types = {
-        'scalar': {
-            'model': ScalarSensor,
-            'resource': ScalarSensorResource
-        },
-        'presence': {
-            'model': PresenceSensor,
-            'resource': PresenceSensorResource
-        }
-    }
-
+    model = DeviceType
+    display_field = 'model'
+    resource_name = 'device_types'
+    resource_type = 'device_type'
+    required_fields = ['model']
+    model_fields = ['manufacturer', 'revision', 'datasheet_url', 'description']
     related_fields = {
-        'ch:device': ResourceField('chain.core.resources.DeviceResource',
-                                   'device')
+        'ch:devices': CollectionField('chain.core.resources.DeviceResource',
+                                      reverse_name='device_type')
     }
-
-    @classmethod
-    def get_schema(cls, filters=None):
-        schema = {
-            'required': ['sensor-type'],
-            'type': 'object',
-            'properties': {
-                'sensor-type': {
-                    'type': 'string',
-                    'title': 'sensor-type',
-                    'enum': cls.available_sensor_types.keys()
-                }
-            },
-            'title': 'Create Sensor'
-        }
-        for sensor_type in cls.available_sensor_types:
-            sub_schema = cls.available_sensor_types[
-                sensor_type]['resource'].get_schema(filters)
-            schema = json_merge(schema, sub_schema)
-        return schema
-
-    @classmethod
-    def create_list(cls, data, req):
-        raise Exception("Not yet implemented.")
-
-    @classmethod
-    def create_single(cls, data, req):
-        if u'sensor-type' not in data:
-            # raise Exception("'type' property not found")
-            # For temporary back-compatability, assume it
-            #   is a ScalarSensor:
-            return ScalarSensorResource.create_single(data, req)
-        for sensor_type in cls.available_sensor_types:
-            if data['sensor-type'] == sensor_type:
-                del data['sensor-type']
-                return cls.available_sensor_types[sensor_type][
-                    'resource'].create_single(data, req)
-        # TODO:  Return 400 rather than raising an exception
-        raise Exception("Unrecognized sensor type.")
-
-    def serialize_single(self, embed, cache, *args, **kwargs):
-        data = super(
-            MixedSensorResource,
-            self).serialize_single(
-            embed,
-            cache,
-            *args,
-            **kwargs)
-        if embed:
-            pass
-        if '_links' in data:
-            data['_links'].update(self.get_links())
-            data['totalCount'] = len(data['_links']['items'])
-        return data
-
-    def serialize_list(self, embed, cache, *args, **kwargs):
-        data = super(
-            MixedSensorResource,
-            self).serialize_list(
-            embed=embed,
-            cache=cache,
-            *args,
-            **kwargs)
-        if embed:
-            pass
-        if '_links' in data:
-            data['_links'].update(self.get_links())
-            data['totalCount'] = len(data['_links']['items'])
-        return data
-
-    def get_links(self):
-        mapped_model_to_res = self.map_model_to_resource()
-        sensors = self.query_models()
-        items = []
-        for sensor in sensors:
-            items.append(
-                {
-                    'href': (
-                        mapped_model_to_res[
-                            type(sensor)](
-                            obj=sensor,
-                            request=self._request)).get_single_href(),
-                    'title': "%s" %
-                    sensor})
-        return {'items': items}
-
-    def map_model_to_resource(self):
-        mapped = {}
-        for sensor_type in self.available_sensor_types:
-            sensor_details = self.available_sensor_types[sensor_type]
-            mapped[sensor_details['model']] = sensor_details['resource']
-        return mapped
-
-    def query_models(self):
-        results = []
-        for sensor_type in self.available_sensor_types:
-            modelResults = self.available_sensor_types[sensor_type][
-                'model'].objects.filter(**self._filters)
-            results.extend(modelResults)
-        return results
-
-    def get_tags(self):
-        return ['sensor-%s' % self._obj.id,
-                'device-%s' % self._obj.device_id,
-                'site-%s' % self._obj.device.site_id]
+    queryset = DeviceType.objects
 
 
+# Edited DRAMSAY
 class DeviceResource(Resource):
 
     model = Device
-    display_field = 'name'
+    display_field = 'unique_name'
     resource_name = 'devices'
     resource_type = 'device'
-    required_fields = ['name']
-    model_fields = ['name', 'description', 'building', 'floor', 'room']
-    ''''ch:sensors': CollectionField(ScalarSensorResource,
-                                      reverse_name='device'),
-        'ch:sensors': CollectionField(PresenceSensorResource,
-                                      reverse_name='device'),'''
+    required_fields = ['unique_name']
+    model_fields = ['unique_name', 'manufacture_date', 'deploy_date', 'serial_no', 'description']
     related_fields = {
-        'ch:sensors': CollectionField(MixedSensorResource,
+        'ch:sensors': CollectionField(SensorResource,
                                       reverse_name='device'),
-        'ch:site': ResourceField('chain.core.resources.SiteResource', 'site')
+        'ch:api_datastores': CollectionField(APIDataStoreResource,
+                                      reverse_name='device'),
+        'ch:deployment': ResourceField('chain.core.resources.DeploymentResource', 'deployment'),
+        'ch:site': ResourceField('chain.core.resources.FixedSiteResource', 'site'),
+        'ch:device_type': ResourceField('chain.core.resources.DeviceTypeResource',
+                                   'device_type')
     }
     queryset = Device.objects
 
     def get_tags(self):
         # sometimes the site_id field is unicode? weird
         return ['device-%d' % self._obj.id,
+                'deployment-%s' % self._obj.deployment_id,
                 'site-%s' % self._obj.site_id]
 
 
-class SiteResource(Resource):
+# Edited DRAMSAY
+class FixedSiteResource(Resource):
 
-    model = Site
+    model = FixedSite
+    display_field = 'name'
+    resource_name = 'sites'
+    resource_type = 'site'
+    required_fields = ['name']
+    model_fields = ['name', 'url']
+    related_fields = {
+        'ch:devices': CollectionField(DeviceResource,
+                                      reverse_name='site'),
+        'ch:api_datastores': CollectionField(APIDataStoreResource,
+                                      reverse_name='site'),
+        'ch:calibration_datastores': CollectionField(CalibrationDataStoreResource,
+                                      reverse_name='site'),
+        'ch:deployment': ResourceField('chain.core.resources.DeploymentResource', 'deployment')
+    }
+    queryset = FixedSite.objects
+
+    def get_tags(self):
+        # sometimes the site_id field is unicode? weird
+        return ['site-%d' % self._obj.id,
+                'deployment-%s' % self._obj.deployment_id]
+
+
+# Edited DRAMSAY
+class DeploymentResource(Resource):
+
+    model = Deployment
+    display_field = 'name'
+    resource_name = 'deployments'
+    resource_type = 'deployment'
+    required_fields = ['name']
+    model_fields = ['name']
+    related_fields = {
+        'ch:sites': CollectionField(FixedSiteResource,
+                                      reverse_name='deployment'),
+        'ch:devices': CollectionField(DeviceResource,
+                                      reverse_name='deployment'),
+        'ch:organization': ResourceField('chain.core.resources.OrganizationResource', 'organization')
+    }
+    queryset = Deployment.objects
+
+    def get_tags(self):
+        # sometimes the site_id field is unicode? weird
+        return ['deployment-%d' % self._obj.id,
+                'organization-%s' % self._obj.organization_id]
+
+# Edited by DRAMSAY
+class OrganizationResource(Resource):
+
+    model = Organization
 
     # TODO _href should be the external URL if present
 
-    resource_name = 'sites'
-    resource_type = 'site'
+    resource_name = 'organizations'
+    resource_type = 'organization'
     display_field = 'name'
     model_fields = ['name']
     required_fields = ['name']
     related_fields = {
-        'ch:devices': CollectionField(DeviceResource, reverse_name='site'),
-        'ch:people': CollectionField(PersonResource, reverse_name='site')
+        'ch:deployments': CollectionField(DeploymentResource, reverse_name='organization'),
+        'ch:contacts': CollectionField(ContactResource, reverse_name='organization')
     }
-    queryset = Site.objects
+    queryset = Organization.objects
 
     def serialize_single(self, embed, cache):
-        data = super(SiteResource, self).serialize_single(embed, cache)
+        data = super(OrganizationResource, self).serialize_single(embed, cache)
         if embed:
             stream = self._obj.raw_zmq_stream
             if stream:
                 data['_links']['rawZMQStream'] = {
                     'href': stream,
                     'title': 'Raw ZMQ Stream'}
-            data['_links']['ch:siteSummary'] = {
+            data['_links']['ch:organizationSummary'] = {
                 'title': 'Summary',
-                'href': full_reverse('site-summary', self._request,
+                'href': full_reverse('organization-summary', self._request,
                                      args=(self._obj.id,))
             }
         return data
 
     def get_filled_schema(self):
-        schema = super(SiteResource, self).get_filled_schema()
+        schema = super(OrganizationResource, self).get_filled_schema()
         schema['properties']['rawZMQStream']['default'] = \
             self._obj.raw_zmq_stream
         return schema
 
     def deserialize(self):
-        super(SiteResource, self).deserialize()
+        super(OrganizationResource, self).deserialize()
         if 'rawZMQStream' in self._data:
             self._obj.raw_zmq_stream = self._data['rawZMQStream']
         return self._obj
 
     def update(self, data):
-        super(SiteResource, self).update(data)
+        super(OrganizationResource, self).update(data)
         if 'rawZMQStream' in data:
             self._obj.raw_zmq_stream = data['rawZMQStream']
         self._obj.save()
 
     def get_tags(self):
-        return ['site-%d' % self._obj.id]
+        return ['organization-%d' % self._obj.id]
 
     @classmethod
     def get_schema(cls, filters=None):
-        schema = super(SiteResource, cls).get_schema(filters)
+        schema = super(OrganizationResource, cls).get_schema(filters)
         schema['properties']['rawZMQStream'] = {
             'type': 'string',
             'format': 'uri',
@@ -795,32 +1001,42 @@ class SiteResource(Resource):
         return schema
 
     @classmethod
-    def site_summary_view(cls, request, id):
+    def organization_summary_view(cls, request, id):
         time_begin = timezone.now() - timedelta(hours=2)
         #filters = request.GET.dict()
-        devices = Device.objects.filter(site_id=id).select_related(
+        deployments = Deployment.objects.filter(organization_id=id)
+        deployment_ids = deployments.values('id')
+        deployment_sites = FixedSite.objects.filter(deployment_id=deployment_ids)
+        site_devices = Device.objects.filter(site_id=deployment_sites).select_related(
             'sensors',
             'sensors__metric',
             'sensors__unit'
         )
-        db_sensor_data = ScalarData.objects.filter(sensor__device__site_id=id,
+        deployment_devices = Device.objects.filter(deployment_id=deployment_ids).select_related(
+            'sensors',
+            'sensors__metric',
+            'sensors__unit'
+        )
+        db_sensor_data = SensorData.objects.filter(sensor__device__deployment__organization_id=id,
+                                                   timestamp__gt=time_begin)
+        db_sensor_site_data = SensorData.objects.filter(sensor__device__site__deployment__organization_id=id,
                                                    timestamp__gt=time_begin)
         response = {
             '_links': {
-                'self': {'href': full_reverse('site-summary', request,
+                'self': {'href': full_reverse('organization-summary', request,
                                               args=(id,))},
             },
-            'devices': []
+            'deployments': []
         }
         sensor_hash = {}
-        for device in devices:
+        for device in itertools.chain(site_devices, deployment_devices):
             dev_resource = DeviceResource(obj=device, request=request)
             dev_data = dev_resource.serialize(rels=False)
             dev_data['href'] = dev_resource.get_single_href()
             response['devices'].append(dev_data)
             dev_data['sensors'] = []
             for sensor in device.sensors.all():
-                sensor_resource = ScalarSensorResource(
+                sensor_resource = SensorResource(
                     obj=sensor,
                     request=request)
                 sensor_data = sensor_resource.serialize(rels=False)
@@ -830,21 +1046,22 @@ class SiteResource(Resource):
                 sensor_hash[sensor.id] = sensor_data
 
         #import pdb; pdb.set_trace()
-        for data in db_sensor_data:
-            data_data = ScalarSensorDataResource(
+        for data in itertools.chain(db_sensor_site_data, db_sensor_data):
+            data_data = SensorDataResource(
                 obj=data, request=request).serialize(rels=False)
             sensor_hash[data.sensor_id]['data'].append(data_data)
         return cls.render_response(response, request)
 
     @classmethod
     def urls(cls):
-        base_patterns = super(SiteResource, cls).urls()
+        base_patterns = super(OrganizationResource, cls).urls()
         base_patterns.append(
-            url(r'^(\d+)/summary$', cls.site_summary_view,
-                name='site-summary'))
+            url(r'^(\d+)/summary$', cls.organization_summary_view,
+                name='organization-summary'))
         return base_patterns
 
 
+# Edited DRAMSAY
 class ApiRootResource(Resource):
 
     def __init__(self, request):
@@ -855,9 +1072,9 @@ class ApiRootResource(Resource):
             '_links': {
                 'self': {'href': full_reverse('api-root', self._request)},
                 'curies': CHAIN_CURIES,
-                'ch:sites': {
-                    'title': 'Sites',
-                    'href': full_reverse('sites-list', self._request)
+                'ch:organizations': {
+                    'title': 'Organizations',
+                    'href': full_reverse('organizations-list', self._request)
                 }
             }
         }
@@ -889,15 +1106,21 @@ urls += patterns('',
                  url("^sensor/", include(ScalarSensorResource.urls())),
                  )
 '''
-resources = [
-    ScalarSensorDataResource,
-    ScalarSensorResource,
-    PresenceDataResource,
-    PresenceSensorResource,
-    PersonResource,
-    MixedSensorResource,
+resources = [ SensorDataResource,
+    CalibrationDataResource,
+    APIDataResource,
+    LocationDataResource,
+    SensorTypeResource,
+    SensorResource,
+    CalibrationDataStoreResource,
+    APITypeResource,
+    APIDataStoreResource,
+    ContactResource,
+    DeviceTypeResource,
     DeviceResource,
-    SiteResource]
+    FixedSiteResource,
+    DeploymentResource,
+    OrganizationResource]
 
 for resource in resources:
     new_url = url("^%s/" % resource.resource_name, include(resource.urls()))
