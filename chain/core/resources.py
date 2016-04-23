@@ -1002,22 +1002,6 @@ class OrganizationResource(Resource):
         time_begin = timezone.now() - timedelta(hours=2)
         #filters = request.GET.dict()
         deployments = Deployment.objects.filter(organization_id=id)
-        deployment_ids = deployments.values('id')
-        deployment_sites = FixedSite.objects.filter(deployment_id=deployment_ids)
-        site_devices = Device.objects.filter(site_id=deployment_sites).select_related(
-            'sensors',
-            'sensors__metric',
-            'sensors__unit'
-        )
-        deployment_devices = Device.objects.filter(deployment_id=deployment_ids).select_related(
-            'sensors',
-            'sensors__metric',
-            'sensors__unit'
-        )
-        db_sensor_data = SensorData.objects.filter(sensor__device__deployment__organization_id=id,
-                                                   timestamp__gt=time_begin)
-        db_sensor_site_data = SensorData.objects.filter(sensor__device__site__deployment__organization_id=id,
-                                                   timestamp__gt=time_begin)
         response = {
             '_links': {
                 'self': {'href': full_reverse('organization-summary', request,
@@ -1025,28 +1009,57 @@ class OrganizationResource(Resource):
             },
             'deployments': []
         }
-        sensor_hash = {}
-        for device in itertools.chain(site_devices, deployment_devices):
-            dev_resource = DeviceResource(obj=device, request=request)
-            dev_data = dev_resource.serialize(rels=False)
-            dev_data['href'] = dev_resource.get_single_href()
-            response['devices'].append(dev_data)
-            dev_data['sensors'] = []
-            for sensor in device.sensors.all():
-                sensor_resource = SensorResource(
-                    obj=sensor,
-                    request=request)
-                sensor_data = sensor_resource.serialize(rels=False)
-                sensor_data['href'] = sensor_resource.get_single_href()
-                dev_data['sensors'].append(sensor_data)
-                sensor_data['data'] = []
-                sensor_hash[sensor.id] = sensor_data
+        #add each deployment in organization
+        for deployment in deployments:
+            dep_resource = DeploymentResource(obj=deployment, request=request)
+            dep_data = dep_resource.serialize(rels=False)
+            dep_data['href'] = dep_resource.get_single_href()
+            response['deployments'].append(dep_data)
+            #deployments can have devices, or sites that have devices
+            dep_data['devices'] = []
+            dep_data['sites'] = []
+            #first add direct child devices
+            deployment_devices = Device.objects.filter(deployment_id=deployment.id)
+            for device in deployment_devices:
+                device_resource = DeviceResource(obj=device, request=request)
+                device_data = device_resource.serialize(rels=False)
+                device_data['href'] = device_resource.get_single_href()
+                #add sensors to device
+                device_data['sensors'] = []
+                for sensor in device.sensors.all():
+                    sensor_resource = SensorResource(
+                        obj=sensor,
+                        request=request)
+                    sensor_data = sensor_resource.serialize(rels=False)
+                    sensor_data['href'] = sensor_resource.get_single_href()
+                    device_data['sensors'].append(sensor_data)
+                dep_data['devices'].append(device_data)
 
-        #import pdb; pdb.set_trace()
-        for data in itertools.chain(db_sensor_site_data, db_sensor_data):
-            data_data = SensorDataResource(
-                obj=data, request=request).serialize(rels=False)
-            sensor_hash[data.sensor_id]['data'].append(data_data)
+            #now add direct child sites, and their devices
+            sites = FixedSite.objects.filter(deployment_id=deployment.id)
+            for site in sites:
+                site_resource = FixedSiteResource(obj=site, request=request)
+                site_data = site_resource.serialize(rels=False)
+                site_data['href'] = site_resource.get_single_href()
+                #now add child devices that live in sites
+                site_data['devices']=[]
+                site_devices = Device.objects.filter(site_id=site.id)
+                for device in site_devices:
+                    device_resource = DeviceResource(obj=device, request=request)
+                    device_data = device_resource.serialize(rels=False)
+                    device_data['href'] = device_resource.get_single_href()
+                    #add sensors to device
+                    device_data['sensors'] = []
+                    for sensor in device.sensors.all():
+                        sensor_resource = SensorResource(
+                            obj=sensor,
+                            request=request)
+                        sensor_data = sensor_resource.serialize(rels=False)
+                        sensor_data['href'] = sensor_resource.get_single_href()
+                        device_data['sensors'].append(sensor_data)
+                    site_data['devices'].append(device_data)
+
+                dep_data['sites'].append(site_data)
         return cls.render_response(response, request)
 
     @classmethod
