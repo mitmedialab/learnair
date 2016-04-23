@@ -8,6 +8,12 @@ class GeoLocation(models.Model):
     longitude = models.FloatField()
     elevation = models.FloatField(null=True, blank=True)
 
+    def __repr__(self):
+        return ('Geolocation(lat=%3f, long=%3f, elev=%3f)' % (self.latitude, self.longitude, self.elevation))
+
+    def __str__(self):
+        return ('%3f, %3f' % (self.latitude, self.longitude))
+
 
 class Organization(models.Model):
     '''An organization that owns one or more deployments within the air
@@ -15,6 +21,12 @@ class Organization(models.Model):
     name = models.CharField(max_length=255, default="")
     url = models.CharField(max_length=255, default='', blank=True)
     raw_zmq_stream = models.CharField(max_length=255, default='', blank=True)
+
+    def __repr__(self):
+        return ('Organization(name=%r)' % (self.name))
+
+    def __str__(self):
+        return self.name
 
 
 class Deployment(models.Model):
@@ -40,6 +52,12 @@ class FixedSite(models.Model):
     url = models.CharField(max_length=255, default='', blank=True)
     geo_location = models.OneToOneField(GeoLocation, null=True, blank=True)
 
+    def __repr__(self):
+        return 'Site(name=%r, deployment=%r)' % (self.name, self.deployment)
+
+    def __str__(self):
+        return self.name
+
 
 class DeviceType(models.Model):
     '''Device Information useful for multiple instances of one device type'''
@@ -48,6 +66,12 @@ class DeviceType(models.Model):
     revision = models.CharField(max_length=255, null=True, blank=True)
     datasheet_url = models.CharField(max_length=255, null=True, blank=True)
     description = models.TextField(null=True, blank=True)
+
+    def __repr__(self):
+        return 'DeviceType(man=%r, model=%r)' % (self.manufacturer, self.model)
+
+    def __str__(self):
+        return self.manufacturer + ' ' + self.model
 
 
 class Device(models.Model):
@@ -92,6 +116,11 @@ class Contact(models.Model):
         verbose_name_plural = "contacts"
         ordering = ["last_name"]
 
+    def __repr__(self):
+        return 'Contact(name=%r %r, email=%r, phone=%r)' % (self.first_name, self.last_name, self.email, self.phone)
+
+    def __str__(self):
+        return self.first_name + ' ' + self.last_name
 
 class Unit(models.Model):
     '''A unit used on a data point, such as "ug/m3", or "kWh"'''
@@ -132,6 +161,12 @@ class SensorType(models.Model):
     service_interval_days = models.FloatField(null=True, blank=True)
     sensor_topology = models.CharField(max_length=255, null=True, blank=True) #ie BAM, laser, electrochemical
 
+    def __repr__(self):
+        return 'SensorType(man=%r, model=%r)' % (self.manufacturer, self.model)
+
+    def __str__(self):
+        return self.manufacturer + ' ' + self.model
+
 
 class Sensor(models.Model):
     '''An individual sensor or a virtual one. There may be multiple sensors on
@@ -150,11 +185,11 @@ class Sensor(models.Model):
     metadata = models.CharField(max_length=255, null=True,  blank=True)
 
     def __repr__(self):
-        return 'Sensor(device=%r, metric=%r, unit=%r)' % (
-            self.device, self.metric, self.unit)
+        return 'Sensor(device=%r, type=%r, metric=%r, unit=%r)' % (
+            self.device, self.sensor_type, self.metric, self.unit)
 
     def __str__(self):
-        return self.metric.name
+        return self.sensor_type + ' ' + self.metric.name
 
 
 class SensorData(models.Model):
@@ -188,6 +223,12 @@ class APIType(models.Model):
     api_base_address = models.URLField(null=True, blank=True)
     description = models.TextField(null=True, blank=True)
 
+    def __repr__(self):
+        return 'APIType(name=%r, address=%r)' % (self.api_name, self.api_base_address)
+
+    def __str__(self):
+        return self.api_name
+
 
 class APIDataStore(models.Model):
     '''A data store representing API data, such as weather,
@@ -196,22 +237,27 @@ class APIDataStore(models.Model):
     # Django automatically creates indices on foreign keys
     device = models.ForeignKey(Device, related_name='api_datastore', null=True, blank=True) #should have either this or fixed site
     site = models.ForeignKey(FixedSite, related_name='api_datastore', null=True, blank=True) #should have either this or deployment
-    api = models.ForeignKey(APIType, related_name='api_datastore')
+    api_type = models.ForeignKey(APIType, related_name='api_datastore', null=True, blank=True)
     metric = models.ForeignKey(Metric, related_name='api_datastore')
     unit = models.ForeignKey(Unit, related_name='api_datastore')
     metadata = models.CharField(max_length=255, null=True, blank=True)
 
     def __repr__(self):
-        return 'API(metric=%r, unit=%r)' % (
-            self.metric, self.unit)
+        return 'APIDataStore(device=%r, site=%r, api_type=%r, metric=%r, unit=%r)' % (
+            self.device, self.site, self.api_type, self.metric, self.unit)
 
     def __str__(self):
-        return self.metric.name
+        if self.device is None and self.site is not None:
+            return ('site %r CalibrationDatastore %r' % (self.site.name, self.metric.name))
+        elif self.device is not None and self.site is None:
+            return ('device %r CalibrationDatastore %r' % (self.device.name, self.metric.name))
+        else:
+            return 'apiDatastore - not properly associated!'
 
 
 class APIData(models.Model):
     '''API Data value'''
-    api_datastore = models.ForeignKey(APIDataStore, related_name='api_scalar_data')
+    api_datastore = models.ForeignKey(APIDataStore, related_name='api_data')
     api_call = models.CharField(max_length=255, null=True, blank=True)
     api_access_time = models.DateTimeField(default=timezone.now, blank=True)
     timestamp = models.DateTimeField(default=timezone.now, blank=True,
@@ -222,11 +268,11 @@ class APIData(models.Model):
     value = models.FloatField()
 
     class Meta:
-        verbose_name_plural = "api scalar data"
+        verbose_name_plural = "api data"
         index_together = [['api_datastore', 'timestamp']]
 
     def __repr__(self):
-        return 'APIScalarData(timestamp=%r, duration=%r, value=%r, datastore=%r)' % (
+        return 'APIData(timestamp=%r, duration=%r, value=%r, datastore=%r)' % (
             self.timestamp, self.duration_sec, self.value, self.api_datastore)
 
     def __str__(self):
@@ -237,17 +283,26 @@ class CalibrationDataStore(models.Model):
     '''A data store representing calibration data or site service visits.'''
     # Django automatically creates indices on foreign keys
     sensor = models.ForeignKey(Sensor, related_name='calibration_datastore', null=True, blank=True) #should have either this or fixed site
-    fixed_site = models.ForeignKey(FixedSite, related_name='calibration_datastore', null=True, blank=True) #should have either this or deployment
+    site = models.ForeignKey(FixedSite, related_name='calibration_datastore', null=True, blank=True) #should have either this or deployment
     metric = models.ForeignKey(Metric, related_name='calibration_datastore', null=True, blank=True)
     unit = models.ForeignKey(Unit, related_name='calibration_datastore', null=True, blank=True)
-    metadata = models.CharField(max_length=255, blank=True)
+    metadata = models.CharField(max_length=255, null=True, blank=True)
 
     def __repr__(self):
-        return 'CalibrationStore(metric=%r, unit=%r)' % (
-            self.metric, self.unit)
+        return 'CalibrationStore(sensor=%r, site=%r, metric=%r, unit=%r)' % (
+            self.sensor, self.site, self.metric, self.unit)
 
     def __str__(self):
-        return self.metric.name
+        if self.sensor is None and self.site is not None and self.metric is None:
+            return ('site %r CalibrationDatastore' % self.site.name)
+        elif self.sensor is not None and self.site is None and self.metric is None:
+            return ('sensor %r CalibrationDatastore' % self.sensor.name)
+        elif self.sensor is None and self.site is not None and self.metric is not None:
+            return ('site %r CalibrationStore %r' % (self.site.name, self.metric.name))
+        elif self.sensor is not None and self.site is None and self.metric is not None:
+            return ('sensor %r CalibrationStore %r' % (self.sensor.name, self.metric.name))
+        else:
+            return 'calibrationDatastore - not properly associated!'
 
 
 class CalibrationData(models.Model):
@@ -271,25 +326,9 @@ class CalibrationData(models.Model):
         return '%.3f %s' % (self.value, self.calibration_datastore.unit)
 
 
-'''
-class LocationDataStore(models.Model):
-    #A data store representing location data for mobile devices.
-    device = models.ForeignKey(Device, related_name='location_datastore', null=True, blank=True) #should have either this or fixed site
-    metadata = models.CharField(max_length=255, blank=True)
-
-    def __repr__(self):
-        return 'API(metric=%r, unit=%r)' % (
-            self.metric, self.unit)
-
-    def __str__(self):
-        return self.metric.name
-'''
-
-
 class LocationData(models.Model):
     '''Mobile, timestamped Location Data for Portable Devices'''
     device = models.ForeignKey(Device, related_name='location_data', null=True, blank=True) #should have either this or fixed site
-    #location_store = models.ForeignKey(LocationDataStore, related_name='location_data')
     timestamp = models.DateTimeField(default=timezone.now, blank=True,
                                      db_index=True)
     latitude = models.FloatField()
@@ -301,6 +340,9 @@ class LocationData(models.Model):
         index_together = [['device', 'timestamp']]
 
     def __repr__(self):
-        return 'LocationData(timestamp=%r, lat=%r, lon=%r, device=%r)' % (
+        return 'LocationData(timestamp=%r, lat=%3f, lon=%3f, device=%r)' % (
             self.timestamp, self.latitude, self.longitude, self.device)
+
+    def __str__(self):
+        return ('%3f, %3f' % (self.latitude, self.longitude))
 

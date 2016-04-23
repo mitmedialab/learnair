@@ -132,7 +132,7 @@ class SensorDataResource(Resource):
         if not self._obj:
             raise ValueError(
                 'Tried to called get_tags on a resource without an object')
-        db_sensor = ScalarSensor.objects.select_related('device').get(
+        db_sensor = Sensor.objects.select_related('device').get(
             id=self._obj.sensor_id)
         return ['sensor-%d' % db_sensor.id,
                 'device-%d' % db_sensor.device_id,
@@ -566,7 +566,7 @@ class SensorResource(Resource):
 
         if embed:
             data['dataType'] = 'float'
-            last_data = self._obj.scalar_data.order_by(
+            last_data = self._obj.sensor_data.order_by(
                 'timestamp').reverse()[:1]
             if last_data:
                 data['value'] = last_data[0].value
@@ -602,7 +602,7 @@ class CalibrationDataStoreResource(Resource):
 
     def serialize_single(self, embed, cache, *args, **kwargs):
         data = super(
-            ScalarSensorResource,
+            CalibrationDataStoreResource,
             self).serialize_single(
             embed,
             cache,
@@ -611,7 +611,7 @@ class CalibrationDataStoreResource(Resource):
 
         if embed:
             data['dataType'] = 'float'
-            last_data = self._obj.scalar_data.order_by(
+            last_data = self._obj.calibration_data.order_by(
                 'timestamp').reverse()[:1]
             if last_data:
                 data['value'] = last_data[0].value
@@ -654,13 +654,11 @@ class APIDataStoreResource(Resource):
     queryset = APIDataStore.objects
     related_fields = {
         'ch:dataHistory': CollectionField(APIDataResource,
-                                          reverse_name='api_data'),
+                                          reverse_name='api_datastore'),
         'ch:device': ResourceField('chain.core.resources.DeviceResource',
                                    'device'),
         'ch:site': ResourceField('chain.core.resources.FixedSiteResource',
                                    'site'),
-        'ch:api': ResourceField('chain.core.resources.APITypeResource',
-                                   'api_type'),
         'ch:api_type': ResourceField('chain.core.resources.APITypeResource',
                                    'api_type')
     }
@@ -676,7 +674,7 @@ class APIDataStoreResource(Resource):
 
         if embed:
             data['dataType'] = 'float'
-            last_data = self._obj.scalar_data.order_by(
+            last_data = self._obj.api_data.order_by(
                 'timestamp').reverse()[:1]
             if last_data:
                 data['value'] = last_data[0].value
@@ -807,6 +805,8 @@ class ContactResource(Resource):
         return ['person-%d' % self._obj.id,
                 'organization-%s' % self._obj.organization_id]
     '''
+
+
 '''
 Merge two "JSON" style dictionary/list objects
   recursively.  Designed for merging schemas from
