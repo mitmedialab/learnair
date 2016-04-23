@@ -1,4 +1,5 @@
-from chain.core.api import Resource, ResourceField, CollectionField
+from chain.core.api import Resource, ResourceField, \
+        CollectionField, ManyToManyCollectionField, ManyReverseCollectionField
 from chain.core.api import full_reverse
 from chain.core.api import CHAIN_CURIES
 from chain.core.api import BadRequestException
@@ -12,7 +13,6 @@ from datetime import timedelta, datetime
 import calendar
 import itertools
 
-# Edited DRAMSAY
 class SensorDataResource(Resource):
     model = SensorData
     display_field = 'timestamp'
@@ -139,7 +139,6 @@ class SensorDataResource(Resource):
                 'site-%d' % db_sensor.device.site_id]
 
 
-# Edited DRAMSAY
 class CalibrationDataResource(Resource):
     model = CalibrationData
     display_field = 'timestamp'
@@ -268,7 +267,6 @@ class CalibrationDataResource(Resource):
         return ['calibration_datastore-%d' % db_calibration_datastore.id]
 
 
-# Edited DRAMSAY
 class APIDataResource(Resource):
     model = APIData
     display_field = 'timestamp'
@@ -395,7 +393,6 @@ class APIDataResource(Resource):
         return ['api_datastore-%d' % db_api_datastore.id]
 
 
-# Edited DRAMSAY
 class LocationDataResource(Resource):
     model = LocationData
     display_field = 'timestamp'
@@ -533,7 +530,6 @@ class SensorTypeResource(Resource):
     queryset = SensorType.objects
 
 
-# Edited DRAMSAY
 class SensorResource(Resource):
 
     model = Sensor
@@ -544,16 +540,14 @@ class SensorResource(Resource):
     required_fields = ['metric', 'unit']
 
     # for now, name is hardcoded as the only attribute of metric and unit
-    stub_fields = {'metric': 'name', 'unit': 'name'}
+    stub_fields = {'metric': 'name', 'unit': 'name', 'sensor_type': 'model'}
     queryset = Sensor.objects
     related_fields = {
         'ch:dataHistory': CollectionField(SensorDataResource,
                                           reverse_name='sensor'),
         'ch:device': ResourceField('chain.core.resources.DeviceResource',
-                                   'device'),
-        'ch:sensor_type': ResourceField('chain.core.resources.SensorTypeResource',
-                                   'sensor_type')
-    }
+                                   'device')
+        }
 
     def serialize_single(self, embed, cache, *args, **kwargs):
         data = super(
@@ -578,7 +572,6 @@ class SensorResource(Resource):
                 'device-%s' % self._obj.device_id]
 
 
-# Edited DRAMSAY
 class CalibrationDataStoreResource(Resource):
 
     model = CalibrationDataStore
@@ -639,7 +632,6 @@ class APITypeResource(Resource):
     queryset = APIType.objects
 
 
-# Edited DRAMSAY
 class APIDataStoreResource(Resource):
 
     model = APIDataStore
@@ -650,7 +642,7 @@ class APIDataStoreResource(Resource):
     required_fields = ['metric', 'unit']
 
     # for now, name is hardcoded as the only attribute of metric and unit
-    stub_fields = {'metric': 'name', 'unit': 'name'}
+    stub_fields = {'metric': 'name', 'unit': 'name', 'api_type': 'name'}
     queryset = APIDataStore.objects
     related_fields = {
         'ch:dataHistory': CollectionField(APIDataResource,
@@ -658,9 +650,7 @@ class APIDataStoreResource(Resource):
         'ch:device': ResourceField('chain.core.resources.DeviceResource',
                                    'device'),
         'ch:site': ResourceField('chain.core.resources.FixedSiteResource',
-                                   'site'),
-        'ch:api_type': ResourceField('chain.core.resources.APITypeResource',
-                                   'api_type')
+                                   'site')
     }
 
     def serialize_single(self, embed, cache, *args, **kwargs):
@@ -687,7 +677,6 @@ class APIDataStoreResource(Resource):
                 'site-%s' % self._obj.site_id]
 
 
-# Edited DRAMSAY
 class ContactResource(Resource):
 
     model = Contact
@@ -696,21 +685,21 @@ class ContactResource(Resource):
     resource_type = 'contact'
     required_fields = ['first_name', 'last_name']
     model_fields = ['first_name', 'last_name', 'email', 'phone']
-    ''' related_fields = {
+    related_fields = {
         'ch:organization': ResourceField('chain.core.resources.OrganizationResource',
                                             'organization'),
-        'ch:deployment': CollectionField('chain.core.resources.DeploymentResource',
-                                            reverse_name='contact'),
-        'ch:site': CollectionField('chain.core.resources.SiteResource',
-                                            reverse_name='contact'),
-        'ch:device': CollectionField('chain.core.resources.DeviceResource',
-                                            reverse_name='contact'),
-        'ch:calibration_data': CollectionField('chain.core.resources.CalibrationDataResource',
+        'ch:deployments': ManyReverseCollectionField('chain.core.resources.DeploymentResource',
+                                            reverse_name='contacts'),
+        'ch:sites': ManyReverseCollectionField('chain.core.resources.FixedSiteResource',
+                                            reverse_name='contacts'),
+        'ch:devices': ManyReverseCollectionField('chain.core.resources.DeviceResource',
+                                            reverse_name='contacts'),
+        'ch:calibration_data': ManyReverseCollectionField('chain.core.resources.CalibrationDataResource',
                                             reverse_name='contact')
     }
-    '''
-    queryset = Contact.objects
 
+    queryset = Contact.objects
+    '''
     def serialize_single(self, embed, cache, *args, **kwargs):
         data = super(
             ContactResource,
@@ -719,10 +708,12 @@ class ContactResource(Resource):
             cache,
             *args,
             **kwargs)
+
         if embed:
             if '_embedded' not in data:
                 data['_embedded'] = {}
             data['_embedded'].update(self.get_additional_embedded())
+
         if '_links' in data:
             data['_links'].update(self.get_additional_links())
         return data
@@ -734,7 +725,7 @@ class ContactResource(Resource):
         filters = {
             'contacts': self._obj
         }
-        return Deployment.objects.filter(**filters)[:1]
+        return Deployment.objects.filter(**filters)
 
     def get_sites(self):
         filters = {
@@ -757,21 +748,24 @@ class ContactResource(Resource):
     def get_additional_links(self):
         links = {}
         last_data = self.get_calibration_data()
+        user_deployments = self.get_deployments()
+        user_sites = self.get_sites()
+        user_devices = self.get_devices()
         if last_data:
             links['last-visit'] = {
                 'href': self.get_calibration_data_url(
                     last_data[0]),
-                'title': "at %s->%s at time %s" %
-                (last_data[0].sensor.device,
-                 last_data[0].sensor.metric,
-                 last_data[0].timestamp.isoformat())}
-        if self._obj.picture_url:
-            links['picture'] = {
-                'href': self._obj.picture_url,
-                'title': 'Picture URL (external)'
-            }
+                'title': "%s at time %s" %
+                (last_data[0].calibration_datastore,
+                 last_data[0].timestamp.isoformat())
+                }
+        if user_deployments:
+            links['ch:deployments'] = {
+                'href': self.get_deployment_url(user_deployments),
+                'title':'Deployments'
+                }
         return links
-    '''
+
     def get_additional_embedded(self):
         embedded = {}
         last_data = self.get_calibration_data()
@@ -783,41 +777,45 @@ class ContactResource(Resource):
             embedded['last-calibration'] = ContactResource(obj=last_data[0], request=self._request)\
                 .serialize_single(False, {})
         if user_deployments:
-            embedded['last-deployment'] = ContactResource(obj=user_deployments[0], request=self._request)\
-                .serialize_single(False, {})
+            embedded['deployment'] = ContactResource(obj=user_deployments, request=self._request)\
+                .serialize(False, {})
         if user_sites:
-            embedded['last-site'] = ContactResource(obj=user_sites[0], request=self._request)\
-                .serialize_single(False, {})
+            embedded['sites'] = ContactResource(obj=user_sites, request=self._request)\
+                .serialize(False, {})
         if user_devices:
-            embedded['last-device'] = ContactResource(obj=user_devices[0], request=self._request)\
-                .serialize_single(False, {})
+            embedded['devices'] = ContactResource(obj=user_devices, request=self._request)\
+                .serialize(False, {})
         return embedded
-    '''
+
     def get_calibration_data_url(self, obj):
         if self._request is None:
             # No way to form URL, just return the person's ID
             return obj.id
-        pdata_resource = CalibrationDataResource(obj=obj, request=self._request)
-        return pdata_resource.get_single_href()
+        cal_data_resource = CalibrationDataResource(obj=obj, request=self._request)
+        return cal_data_resource.get_single_href()
+
+    def get_deployment_url(self, obj):
+        if self._request is None:
+            # No way to form URL, just return the person's ID
+            return obj.id
+        deployment_resource = DeploymentResource(obj=obj, request=self._request)
+        return deployment_resource.get_single_href()
     '''
     def get_tags(self):
         # sometimes the site_id field is unicode? weird
         return ['person-%d' % self._obj.id,
                 'organization-%s' % self._obj.organization_id]
-    '''
 
-
-'''
-Merge two "JSON" style dictionary/list objects
-  recursively.  Designed for merging schemas from
-  multiple sensor objects.
-
-If two objects are not merge-able, the version from
-  obj1 is used.
-'''
 
 
 def json_merge(obj1, obj2):
+    ''' Merge two "JSON" style dictionary/list objects
+    recursively.  Designed for merging schemas from
+    multiple sensor objects.
+
+    If two objects are not merge-able, the version from
+    obj1 is used.
+    '''
     if isinstance(obj1, list):
         # Merge array:
         set_used = set(obj1)
@@ -859,7 +857,6 @@ class DeviceTypeResource(Resource):
     queryset = DeviceType.objects
 
 
-# Edited DRAMSAY
 class DeviceResource(Resource):
 
     model = Device
@@ -868,6 +865,7 @@ class DeviceResource(Resource):
     resource_type = 'device'
     required_fields = ['unique_name']
     model_fields = ['unique_name', 'manufacture_date', 'deploy_date', 'serial_no', 'description']
+    stub_fields = {'device_type':'model'}
     related_fields = {
         'ch:sensors': CollectionField(SensorResource,
                                       reverse_name='device'),
@@ -875,8 +873,7 @@ class DeviceResource(Resource):
                                       reverse_name='device'),
         'ch:deployment': ResourceField('chain.core.resources.DeploymentResource', 'deployment'),
         'ch:site': ResourceField('chain.core.resources.FixedSiteResource', 'site'),
-        'ch:device_type': ResourceField('chain.core.resources.DeviceTypeResource',
-                                   'device_type')
+        'ch:contacts': ManyToManyCollectionField(ContactResource, reverse_name='devices')
     }
     queryset = Device.objects
 
@@ -887,7 +884,6 @@ class DeviceResource(Resource):
                 'site-%s' % self._obj.site_id]
 
 
-# Edited DRAMSAY
 class FixedSiteResource(Resource):
 
     model = FixedSite
@@ -903,7 +899,8 @@ class FixedSiteResource(Resource):
                                       reverse_name='site'),
         'ch:calibration_datastores': CollectionField(CalibrationDataStoreResource,
                                       reverse_name='site'),
-        'ch:deployment': ResourceField('chain.core.resources.DeploymentResource', 'deployment')
+        'ch:deployment': ResourceField('chain.core.resources.DeploymentResource', 'deployment'),
+        'ch:contacts': ManyToManyCollectionField(ContactResource, reverse_name='sites')
     }
     queryset = FixedSite.objects
 
@@ -913,7 +910,6 @@ class FixedSiteResource(Resource):
                 'deployment-%s' % self._obj.deployment_id]
 
 
-# Edited DRAMSAY
 class DeploymentResource(Resource):
 
     model = Deployment
@@ -927,7 +923,8 @@ class DeploymentResource(Resource):
                                       reverse_name='deployment'),
         'ch:devices': CollectionField(DeviceResource,
                                       reverse_name='deployment'),
-        'ch:organization': ResourceField('chain.core.resources.OrganizationResource', 'organization')
+        'ch:organization': ResourceField('chain.core.resources.OrganizationResource', 'organization'),
+        'ch:contacts': ManyToManyCollectionField(ContactResource, reverse_name='deployments')
     }
     queryset = Deployment.objects
 

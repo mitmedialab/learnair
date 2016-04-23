@@ -68,11 +68,16 @@ class DeviceType(models.Model):
     description = models.TextField(null=True, blank=True)
 
     def __repr__(self):
-        return 'DeviceType(man=%r, model=%r)' % (self.manufacturer, self.model)
+        if self.manufacturer is not None:
+            return 'DeviceType(man=%r, model=%r)' % (self.manufacturer, self.model)
+        else:
+            return 'DeviceType(model=%r)' % (self.model)
 
     def __str__(self):
-        return self.manufacturer + ' ' + self.model
-
+        if self.manufacturer is not None:
+            return self.manufacturer + ' ' + self.model
+        else:
+            return self.model
 
 class Device(models.Model):
     '''A set of co-located sensors, often sharing a PCB and/or enclosure.'''

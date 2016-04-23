@@ -25,9 +25,9 @@ def capitalize(word):
 
 def schema_type_from_model_field(field):
     field_class = field.__class__
-    if field_class == models.FloatField:
+    if field_class in [models.FloatField, models.IntegerField]:
         return 'number', None
-    elif field_class in [models.CharField, models.TextField]:
+    elif field_class in [models.CharField, models.TextField, models.EmailField]:
         return 'string', None
     elif field_class == models.DateTimeField:
         return 'string', 'date-time'
@@ -35,8 +35,6 @@ def schema_type_from_model_field(field):
         return 'boolean', None
     elif field_class == models.ForeignKey:
         return 'string', 'url'
-    elif field_class == models.EmailField:
-        return 'string', 'email_address'
     else:
         raise NotImplementedError('Field type %s not recognized' % field_class)
 
@@ -116,6 +114,57 @@ class CollectionField(object):
         # children, and not all the resources
 
         parent_filter = {self._reverse_name + '_id': parent._obj.id}
+        return self._child_resource_class(queryset=queryset, request=request,
+                                          filters=parent_filter).serialize(
+                                              embed=self._embed, cache=cache)
+
+
+class ManyToManyCollectionField(object):
+
+    '''A Collection field is a field on a resource that points to a child
+    collection, e.g. an Author resource might have a 'books' field that is a
+    collection of all the books by that author. By default the serialized data
+    will only have a link to the child collection, but by setting embed=True
+    you can actually embed the full collection inside the parent object.'''
+
+    def __init__(self, child_resource_class, reverse_name, embed=False):
+        self._reverse_name = reverse_name
+        self._embed = embed
+        self._child_resource_class = child_resource_class
+
+    def serialize(self, parent, request, cache):
+        queryset = self._child_resource_class.queryset
+
+        # generate a filter on the child collection so we get the actual
+        # children, and not all the resources
+
+        parent_filter = {self._reverse_name: parent._obj.id}
+        return self._child_resource_class(queryset=queryset, request=request,
+                                          filters=parent_filter).serialize(
+                                              embed=self._embed, cache=cache)
+
+
+class ManyReverseCollectionField(object):
+
+    '''A Collection field is a field on a resource that points to a child
+    collection, e.g. an Author resource might have a 'books' field that is a
+    collection of all the books by that author. By default the serialized data
+    will only have a link to the child collection, but by setting embed=True
+    you can actually embed the full collection inside the parent object.'''
+
+    def __init__(self, child_resource_class, reverse_name, embed=False):
+        self._reverse_name = reverse_name
+        self._embed = embed
+        self._child_resource_class = child_resource_class
+
+    def serialize(self, parent, request, cache):
+        self._child_resource_class = unlazy(self._child_resource_class)
+
+        queryset = self._child_resource_class.model.objects.all()
+        # generate a filter on the child collection so we get the actual
+        # children, and not all the resources
+
+        parent_filter = {self._reverse_name: parent._obj.id}
         return self._child_resource_class(queryset=queryset, request=request,
                                           filters=parent_filter).serialize(
                                               embed=self._embed, cache=cache)

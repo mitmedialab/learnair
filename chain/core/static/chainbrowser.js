@@ -160,7 +160,11 @@ function render_response(data, element) {
                 }
                 else {
                     // link is just a link, not a list of links
-                    dest_link = $("<a>").text(link.title).attr("href", link.href);
+                    if (link == null){
+                        dest_link = $("<i>resource not linked</i>");
+                    } else {
+                        dest_link = $("<a>").text(link.title).attr("href", link.href);
+                    }
                     cell.append(dest_link);
                 }
             }
