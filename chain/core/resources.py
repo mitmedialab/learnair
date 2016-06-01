@@ -6,7 +6,8 @@ from chain.core.api import BadRequestException
 from chain.core.api import register_resource
 from chain.core.models import Organization, Deployment, FixedSite, Device, \
     Sensor, SensorType, SensorData, APIDataStore, APIData, APIType, \
-    CalibrationDataStore, CalibrationData, LocationData, Contact, DeviceType
+    CalibrationDataStore, CalibrationData, LocationData, Contact, DeviceType, \
+    GeoLocation
 from django.conf.urls import include, patterns, url
 from django.utils import timezone
 from datetime import timedelta, datetime
@@ -21,7 +22,7 @@ class SensorDataResource(Resource):
     model_fields = ['timestamp', 'value', 'duration_sec']
     required_fields = ['value']
     queryset = SensorData.objects
-    default_timespan = timedelta(hours=6)
+    default_timespan = timedelta(days=6)
 
     def __init__(self, *args, **kwargs):
         super(SensorDataResource, self).__init__(*args, **kwargs)
@@ -139,6 +140,132 @@ class SensorDataResource(Resource):
                 'site-%d' % db_sensor.device.site_id]
 
 
+class GeoLocationResource(Resource):
+    model = GeoLocation
+    display_field = 'timestamp'
+    resource_name = 'geolocation_data'
+    resource_type = 'geolocation_data'
+    model_fields = ['timestamp', 'elevation']
+    required_fields = ['latitude', 'longitude']
+    queryset = GeoLocation.objects
+    default_timespan = timedelta(days=6)
+
+    def __init__(self, *args, **kwargs):
+        super(GeoLocationResource, self).__init__(*args, **kwargs)
+        if 'queryset' in kwargs:
+            # we want to default to the last page, not the first page
+            pass
+
+    def serialize_list(self, embed, cache):
+        '''a "list" of SensorData resources is actually represented
+        as a single resource with a list of data points'''
+
+        if not embed:
+            return super(
+                GeoLocationResource,
+                self).serialize_list(
+                embed,
+                cache)
+
+        href = self.get_list_href()
+
+        serialized_data = {
+            '_links': {
+                'curies': CHAIN_CURIES,
+                'createForm': {
+                    'href': self.get_create_href(),
+                    'title': 'Add Data'
+                }
+            },
+            'dataType': 'float'
+        }
+        request_time = timezone.now()
+
+        # if the time filters aren't given then use the most recent timespan,
+        # if they are given, then we need to convert them from unix time to use
+        # in the queryset filter
+        if 'timestamp__gte' in self._filters:
+            try:
+                page_start = datetime.utcfromtimestamp(
+                    float(self._filters['timestamp__gte'])).replace(
+                        tzinfo=timezone.utc)
+            except ValueError:
+                raise BadRequestException(
+                    "Invalid timestamp format for lower bound of date range.")
+        else:
+            page_start = request_time - self.default_timespan
+
+        if 'timestamp__lt' in self._filters:
+            try:
+                page_end = datetime.utcfromtimestamp(
+                    float(self._filters['timestamp__lt'])).replace(
+                        tzinfo=timezone.utc)
+            except ValueError:
+                raise BadRequestException(
+                    "Invalid timestamp format for upper bound of date range.")
+        else:
+            page_end = request_time
+
+        self._filters['timestamp__gte'] = page_start
+        self._filters['timestamp__lt'] = page_end
+
+        objs = self._queryset.filter(**self._filters).order_by('timestamp')
+
+        serialized_data = self.add_page_links(serialized_data, href,
+                                              page_start, page_end)
+        serialized_data['data'] = [{
+            'value': obj.value,
+            'timestamp': obj.timestamp.isoformat(),
+            'duration_sec': obj.duration_sec}
+            for obj in objs]
+        return serialized_data
+
+    def format_time(self, timestamp):
+        return calendar.timegm(timestamp.timetuple())
+
+    def add_page_links(self, data, href, page_start, page_end):
+        timespan = page_end - page_start
+        data['_links']['previous'] = {
+            'href': self.update_href(
+                href, timestamp__gte=self.format_time(page_start - timespan),
+                timestamp__lt=self.format_time(page_start)),
+            'title': '%s to %s' % (page_start - timespan, page_start),
+        }
+        data['_links']['self'] = {
+            'href': self.update_href(
+                href, timestamp__gte=self.format_time(page_start),
+                timestamp__lt=self.format_time(page_end)),
+        }
+        data['_links']['next'] = {
+            'href': self.update_href(
+                href, timestamp__gte=self.format_time(page_end),
+                timestamp__lt=self.format_time(page_end + timespan)),
+            'title': '%s to %s' % (page_end, page_end + timespan),
+        }
+        return data
+
+    def serialize_stream(self):
+        '''Serialize this resource for a stream'''
+        data = self.serialize_single(rels=False)
+        data['_links'] = {
+            'self': {'href': self.get_single_href()},
+            'ch:sensor': {'href': full_reverse(
+                'sensors-single', self._request,
+                args=(self._filters['sensor_id'],))}
+        }
+        return data
+
+    def get_tags(self):
+        if not self._obj:
+            raise ValueError(
+                'Tried to called get_tags on a resource without an object')
+        db_geolocation = GeoLocation.objects.select_related('device').get(
+            id=self._obj.geolocation_id)
+        return ['sensor-%d' % db_geolocation.id,
+                'device-%d' % db_geolocation.device_id,
+                'site-%d' % db_geolocation.device.site_id]
+
+
 class CalibrationDataResource(Resource):
     model = CalibrationData
     display_field = 'timestamp'
@@ -147,8 +274,8 @@ class CalibrationDataResource(Resource):
     model_fields = ['timestamp', 'value', 'description']
     required_fields = []
     related_fields = {
-        'ch:contacts': CollectionField('chain.core.resources.ContactResource',
-                                            reverse_name='calibration_data'),
+        'ch:contacts': ManyReverseCollectionField('chain.core.resources.ContactResource',
+                                            reverse_name='calibration_data')
     }
     queryset = CalibrationData.objects
     default_timespan = timedelta(days=6)
@@ -257,15 +384,15 @@ class CalibrationDataResource(Resource):
                 args=(self._filters['calibration_datastore_id'],))}
         }
         return data
-
+    '''
     def get_tags(self):
         if not self._obj:
             raise ValueError(
                 'Tried to called get_tags on a resource without an object')
-        db_sensor = ScalarSensor.objects.select_related('device').get(
-            id=self._obj.sensor_id)
+        db_calibration_datastore = CalibrationDataStore.objects.select_related('device').get(
+            id=self._obj.db_calibration_datastore_id)
         return ['calibration_datastore-%d' % db_calibration_datastore.id]
-
+    '''
 
 class APIDataResource(Resource):
     model = APIData
@@ -275,7 +402,7 @@ class APIDataResource(Resource):
     model_fields = ['timestamp', 'value', 'duration_sec', 'api_access_time', 'api_call']
     required_fields = ['value']
     queryset = APIData.objects
-    default_timespan = timedelta(hours=6)
+    default_timespan = timedelta(days=6)
 
     def __init__(self, *args, **kwargs):
         super(APIDataResource, self).__init__(*args, **kwargs)
@@ -383,14 +510,15 @@ class APIDataResource(Resource):
                 args=(self._filters['api_datastore_id'],))}
         }
         return data
-
+    '''
     def get_tags(self):
         if not self._obj:
             raise ValueError(
                 'Tried to called get_tags on a resource without an object')
-        db_sensor = ScalarSensor.objects.select_related('device').get(
-            id=self._obj.sensor_id)
+        db_api_datastore_id = APIDataStore.objects.select_related('device').get(
+            id=self._obj.api_datastore_id)
         return ['api_datastore-%d' % db_api_datastore.id]
+    '''
 
 
 class LocationDataResource(Resource):
@@ -401,7 +529,7 @@ class LocationDataResource(Resource):
     model_fields = ['timestamp', 'elevation']
     required_fields = ['latitude','longitude']
     queryset = LocationData.objects
-    default_timespan = timedelta(hours=6)
+    default_timespan = timedelta(days=6)
 
     def __init__(self, *args, **kwargs):
         super(LocationDataResource, self).__init__(*args, **kwargs)
@@ -522,9 +650,9 @@ class SensorTypeResource(Resource):
     resource_name = 'sensor_types'
     resource_type = 'sensor_type'
     required_fields = ['model']
-    model_fields = ['manufacturer', 'revision', 'datasheet_url', 'description', 'learn_priority','service_interval_days', 'sensor_topology']
+    model_fields = ['manufacturer', 'model', 'revision', 'datasheet_url', 'description', 'learn_priority','service_interval_days', 'sensor_topology']
     related_fields = {
-        'ch:sensors': CollectionField('chain.core.resources.SensorResource',
+        'ch:sensors': ManyReverseCollectionField('chain.core.resources.SensorResource',
                                       reverse_name='sensor_type')
     }
     queryset = SensorType.objects
@@ -537,12 +665,13 @@ class SensorResource(Resource):
     resource_name = 'sensors'
     resource_type = 'sensor'
     model_fields = ['data_status', 'manufacture_date', 'deploy_date', 'metadata']
-    required_fields = ['metric', 'unit']
+    required_fields = ['metric', 'unit', 'sensor_type']
 
     # for now, name is hardcoded as the only attribute of metric and unit
-    stub_fields = {'metric': 'name', 'unit': 'name', 'sensor_type': 'model'}
+    stub_fields = {'metric': 'name', 'unit': 'name'}
     queryset = Sensor.objects
     related_fields = {
+        'ch:sensor_type': ResourceField('chain.core.resources.SensorTypeResource', 'sensor_type'),
         'ch:dataHistory': CollectionField(SensorDataResource,
                                           reverse_name='sensor'),
         'ch:device': ResourceField('chain.core.resources.DeviceResource',
@@ -576,10 +705,10 @@ class CalibrationDataStoreResource(Resource):
 
     model = CalibrationDataStore
     display_field = 'metric'
-    resource_name = 'calibration_datastore'
+    resource_name = 'calibration_datastores'
     resource_type = 'calibration_datastore'
-    model_fields = ['metadata']
     required_fields = ['metric', 'unit']
+    model_fields = ['metadata']
 
     # for now, name is hardcoded as the only attribute of metric and unit
     stub_fields = {'metric': 'name', 'unit': 'name'}
@@ -620,10 +749,10 @@ class CalibrationDataStoreResource(Resource):
 class APITypeResource(Resource):
 
     model = APIType
-    display_field = 'name'
+    display_field = 'api_name'
     resource_name = 'api_types'
     resource_type = 'api_type'
-    required_fields = ['name']
+    required_fields = ['api_name']
     model_fields = ['api_base_address','description']
     related_fields = {
         'ch:api_datastores': CollectionField('chain.core.resources.APIDataStoreResource',
@@ -639,10 +768,10 @@ class APIDataStoreResource(Resource):
     resource_name = 'api_datastores'
     resource_type = 'api_datastore'
     model_fields = ['metadata']
-    required_fields = ['metric', 'unit']
+    required_fields = ['metric', 'unit', 'api_type']
 
     # for now, name is hardcoded as the only attribute of metric and unit
-    stub_fields = {'metric': 'name', 'unit': 'name', 'api_type': 'name'}
+    stub_fields = {'metric': 'name', 'unit': 'name', 'api_type': 'api_name'}
     queryset = APIDataStore.objects
     related_fields = {
         'ch:dataHistory': CollectionField(APIDataResource,
@@ -849,9 +978,9 @@ class DeviceTypeResource(Resource):
     resource_name = 'device_types'
     resource_type = 'device_type'
     required_fields = ['model']
-    model_fields = ['manufacturer', 'revision', 'datasheet_url', 'description']
+    model_fields = ['manufacturer', 'model', 'revision', 'datasheet_url', 'description']
     related_fields = {
-        'ch:devices': CollectionField('chain.core.resources.DeviceResource',
+        'ch:devices': ManyReverseCollectionField('chain.core.resources.DeviceResource',
                                       reverse_name='device_type')
     }
     queryset = DeviceType.objects
@@ -865,15 +994,17 @@ class DeviceResource(Resource):
     resource_type = 'device'
     required_fields = ['unique_name']
     model_fields = ['unique_name', 'manufacture_date', 'deploy_date', 'serial_no', 'description']
-    stub_fields = {'device_type':'model'}
     related_fields = {
+        'ch:device_type': ResourceField('chain.core.resources.DeviceTypeResource', 'device_type'),
         'ch:sensors': CollectionField(SensorResource,
                                       reverse_name='device'),
         'ch:api_datastores': CollectionField(APIDataStoreResource,
                                       reverse_name='device'),
         'ch:deployment': ResourceField('chain.core.resources.DeploymentResource', 'deployment'),
         'ch:site': ResourceField('chain.core.resources.FixedSiteResource', 'site'),
-        'ch:contacts': ManyToManyCollectionField(ContactResource, reverse_name='devices')
+        'ch:contacts': ManyToManyCollectionField(ContactResource, reverse_name='devices'),
+        'ch:location_dataHistory': CollectionField(LocationDataResource,
+                                          reverse_name='location_data'),
     }
     queryset = Device.objects
 
@@ -999,7 +1130,7 @@ class OrganizationResource(Resource):
 
     @classmethod
     def organization_summary_view(cls, request, id):
-        time_begin = timezone.now() - timedelta(hours=2)
+        time_begin = timezone.now() - timedelta(days=1)
         #filters = request.GET.dict()
         deployments = Deployment.objects.filter(organization_id=id)
         response = {
@@ -1117,6 +1248,7 @@ urls += patterns('',
                  )
 '''
 resources = [ SensorDataResource,
+    GeoLocationResource,
     CalibrationDataResource,
     APIDataResource,
     LocationDataResource,

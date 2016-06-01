@@ -7,6 +7,8 @@ class GeoLocation(models.Model):
     latitude = models.FloatField()
     longitude = models.FloatField()
     elevation = models.FloatField(null=True, blank=True)
+    timestamp = models.DateTimeField(default=timezone.now, null=True, blank=True,
+                                     db_index=True)
 
     def __repr__(self):
         return ('Geolocation(lat=%3f, long=%3f, elev=%3f)' % (self.latitude, self.longitude, self.elevation))
@@ -253,9 +255,9 @@ class APIDataStore(models.Model):
 
     def __str__(self):
         if self.device is None and self.site is not None:
-            return ('site %r CalibrationDatastore %r' % (self.site.name, self.metric.name))
+            return ('site %r APIDatastore %r' % (self.site.name, self.metric.name))
         elif self.device is not None and self.site is None:
-            return ('device %r CalibrationDatastore %r' % (self.device.name, self.metric.name))
+            return ('device %r APIDatastore %r' % (self.device.name, self.metric.name))
         else:
             return 'apiDatastore - not properly associated!'
 
@@ -289,9 +291,9 @@ class CalibrationDataStore(models.Model):
     # Django automatically creates indices on foreign keys
     sensor = models.ForeignKey(Sensor, related_name='calibration_datastore', null=True, blank=True) #should have either this or fixed site
     site = models.ForeignKey(FixedSite, related_name='calibration_datastore', null=True, blank=True) #should have either this or deployment
-    metric = models.ForeignKey(Metric, related_name='calibration_datastore', null=True, blank=True)
-    unit = models.ForeignKey(Unit, related_name='calibration_datastore', null=True, blank=True)
-    metadata = models.CharField(max_length=255, null=True, blank=True)
+    metric = models.ForeignKey(Metric, related_name='calibration_datastore')
+    unit = models.ForeignKey(Unit, related_name='calibration_datastore')
+    metadata = models.TextField(null=True, blank=True)
 
     def __repr__(self):
         return 'CalibrationStore(sensor=%r, site=%r, metric=%r, unit=%r)' % (

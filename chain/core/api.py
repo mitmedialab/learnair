@@ -42,7 +42,7 @@ def schema_type_from_model_field(field):
 # TODO: this should get the URL dynamically
 CHAIN_CURIES = [{
     'name': 'ch',
-    'href': 'http://learnair.media.mit.edu/rels/{rel}',
+    'href': 'http://learnair.media.mit.edu:8000/rels/{rel}',
     'templated': True
 }]
 
