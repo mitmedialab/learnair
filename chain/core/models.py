@@ -89,6 +89,7 @@ class Device(models.Model):
     site = models.ForeignKey(FixedSite, related_name='devices', null=True, blank=True) #should have either this or deployment
     manufacture_date = models.DateTimeField(null=True, blank=True)
     deploy_date = models.DateTimeField(null=True, blank=True)
+    geo_location = models.OneToOneField(GeoLocation, null=True, blank=True)
 
     serial_no = models.CharField(max_length=255, null=True, blank=True)
     description = models.TextField(null=True, blank=True)
