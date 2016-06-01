@@ -6,8 +6,7 @@ from chain.core.api import BadRequestException
 from chain.core.api import register_resource
 from chain.core.models import Organization, Deployment, FixedSite, Device, \
     Sensor, SensorType, SensorData, APIDataStore, APIData, APIType, \
-    CalibrationDataStore, CalibrationData, LocationData, Contact, DeviceType, \
-    GeoLocation
+    CalibrationDataStore, CalibrationData, LocationData, Contact, DeviceType
 from django.conf.urls import include, patterns, url
 from django.utils import timezone
 from datetime import timedelta, datetime
@@ -138,133 +137,6 @@ class SensorDataResource(Resource):
         return ['sensor-%d' % db_sensor.id,
                 'device-%d' % db_sensor.device_id,
                 'site-%d' % db_sensor.device.site_id]
-
-
-class GeoLocationResource(Resource):
-    model = GeoLocation
-    display_field = 'timestamp'
-    resource_name = 'geolocation_data'
-    resource_type = 'geolocation_data'
-    model_fields = ['timestamp', 'elevation']
-    required_fields = ['latitude', 'longitude']
-    queryset = GeoLocation.objects
-    default_timespan = timedelta(days=6)
-
-    def __init__(self, *args, **kwargs):
-        super(GeoLocationResource, self).__init__(*args, **kwargs)
-        if 'queryset' in kwargs:
-            # we want to default to the last page, not the first page
-            pass
-
-    def serialize_list(self, embed, cache):
-        '''a "list" of SensorData resources is actually represented
-        as a single resource with a list of data points'''
-
-        if not embed:
-            return super(
-                GeoLocationResource,
-                self).serialize_list(
-                embed,
-                cache)
-
-        href = self.get_list_href()
-
-        serialized_data = {
-            '_links': {
-                'curies': CHAIN_CURIES,
-                'createForm': {
-                    'href': self.get_create_href(),
-                    'title': 'Add Data'
-                }
-            },
-            'dataType': 'float'
-        }
-        request_time = timezone.now()
-
-        # if the time filters aren't given then use the most recent timespan,
-        # if they are given, then we need to convert them from unix time to use
-        # in the queryset filter
-        if 'timestamp__gte' in self._filters:
-            try:
-                page_start = datetime.utcfromtimestamp(
-                    float(self._filters['timestamp__gte'])).replace(
-                        tzinfo=timezone.utc)
-            except ValueError:
-                raise BadRequestException(
-                    "Invalid timestamp format for lower bound of date range.")
-        else:
-            page_start = request_time - self.default_timespan
-
-        if 'timestamp__lt' in self._filters:
-            try:
-                page_end = datetime.utcfromtimestamp(
-                    float(self._filters['timestamp__lt'])).replace(
-                        tzinfo=timezone.utc)
-            except ValueError:
-                raise BadRequestException(
-                    "Invalid timestamp format for upper bound of date range.")
-        else:
-            page_end = request_time
-
-        self._filters['timestamp__gte'] = page_start
-        self._filters['timestamp__lt'] = page_end
-
-        objs = self._queryset.filter(**self._filters).order_by('timestamp')
-
-        serialized_data = self.add_page_links(serialized_data, href,
-                                              page_start, page_end)
-        serialized_data['data'] = [{
-            'value': obj.value,
-            'timestamp': obj.timestamp.isoformat(),
-            'duration_sec': obj.duration_sec}
-            for obj in objs]
-        return serialized_data
-
-    def format_time(self, timestamp):
-        return calendar.timegm(timestamp.timetuple())
-
-    def add_page_links(self, data, href, page_start, page_end):
-        timespan = page_end - page_start
-        data['_links']['previous'] = {
-            'href': self.update_href(
-                href, timestamp__gte=self.format_time(page_start - timespan),
-                timestamp__lt=self.format_time(page_start)),
-            'title': '%s to %s' % (page_start - timespan, page_start),
-        }
-        data['_links']['self'] = {
-            'href': self.update_href(
-                href, timestamp__gte=self.format_time(page_start),
-                timestamp__lt=self.format_time(page_end)),
-        }
-        data['_links']['next'] = {
-            'href': self.update_href(
-                href, timestamp__gte=self.format_time(page_end),
-                timestamp__lt=self.format_time(page_end + timespan)),
-            'title': '%s to %s' % (page_end, page_end + timespan),
-        }
-        return data
-
-    def serialize_stream(self):
-        '''Serialize this resource for a stream'''
-        data = self.serialize_single(rels=False)
-        data['_links'] = {
-            'self': {'href': self.get_single_href()},
-            'ch:sensor': {'href': full_reverse(
-                'sensors-single', self._request,
-                args=(self._filters['sensor_id'],))}
-        }
-        return data
-
-    def get_tags(self):
-        if not self._obj:
-            raise ValueError(
-                'Tried to called get_tags on a resource without an object')
-        db_geolocation = GeoLocation.objects.select_related('device').get(
-            id=self._obj.geolocation_id)
-        return ['sensor-%d' % db_geolocation.id,
-                'device-%d' % db_geolocation.device_id,
-                'site-%d' % db_geolocation.device.site_id]
-
 
 class CalibrationDataResource(Resource):
     model = CalibrationData
@@ -526,7 +398,7 @@ class LocationDataResource(Resource):
     display_field = 'timestamp'
     resource_name = 'location_data'
     resource_type = 'location_data'
-    model_fields = ['timestamp', 'elevation']
+    model_fields = ['timestamp', 'elevation', 'latitude', 'longitude']
     required_fields = ['latitude','longitude']
     queryset = LocationData.objects
     default_timespan = timedelta(days=6)
@@ -1004,9 +876,28 @@ class DeviceResource(Resource):
         'ch:site': ResourceField('chain.core.resources.FixedSiteResource', 'site'),
         'ch:contacts': ManyToManyCollectionField(ContactResource, reverse_name='devices'),
         'ch:location_dataHistory': CollectionField(LocationDataResource,
-                                          reverse_name='location_data'),
+                                          reverse_name='device')
     }
     queryset = Device.objects
+
+    def serialize_single(self, embed, cache, *args, **kwargs):
+        data = super(
+            DeviceResource,
+            self).serialize_single(
+            embed,
+            cache,
+            *args,
+            **kwargs)
+
+        if embed:
+            data['dataType'] = 'float'
+            last_data = self._obj.location_data.order_by(
+                'timestamp').reverse()[:1]
+            if last_data:
+                data['latitude'] = last_data[0].latitude
+                data['longitude'] = last_data[0].longitude
+                data['updated'] = last_data[0].timestamp.isoformat()
+        return data
 
     def get_tags(self):
         # sometimes the site_id field is unicode? weird
@@ -1248,7 +1139,6 @@ urls += patterns('',
                  )
 '''
 resources = [ SensorDataResource,
-    GeoLocationResource,
     CalibrationDataResource,
     APIDataResource,
     LocationDataResource,
