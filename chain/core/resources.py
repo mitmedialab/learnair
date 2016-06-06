@@ -540,7 +540,7 @@ class SensorResource(Resource):
     required_fields = ['metric', 'unit', 'sensor_type']
 
     # for now, name is hardcoded as the only attribute of metric and unit
-    stub_fields = {'metric': 'name', 'unit': 'name'}
+    stub_fields = {'metric': 'name', 'unit': 'name','sensor_type':'model'}
     queryset = Sensor.objects
     related_fields = {
         'ch:sensor_type': ResourceField('chain.core.resources.SensorTypeResource', 'sensor_type'),
