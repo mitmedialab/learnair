@@ -2,6 +2,7 @@ from django.db import models
 from django.utils import timezone
 from django.core.validators import RegexValidator
 
+
 class GeoLocation(models.Model):
     '''For Fixed Locations.  For mobile device location data, see below.'''
     latitude = models.FloatField()

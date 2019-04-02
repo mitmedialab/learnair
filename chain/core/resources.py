@@ -13,6 +13,7 @@ from datetime import timedelta, datetime
 import calendar
 import itertools
 
+
 class SensorDataResource(Resource):
     model = SensorData
     display_field = 'timestamp'
